@@ -53,15 +53,33 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
+  EnableMysqlAuthEd25519:
+    type: boolean
+    description: Whether to configure MySQL users to connect to the
+                 server using the Ed25519-based client authentication.
+    default: false
   MysqlIPv6:
     default: false
     description: Enable IPv6 in MySQL
     type: boolean
 
+parameter_groups:
+- label: deprecated
+  description: |
+   The following parameters are deprecated and will be removed. They should not
+   be relied on for new deployments. If you have concerns regarding deprecated
+   parameters, please contact the TripleO development team on IRC or the
+   OpenStack mailing list.
+  parameters:
+  - MysqlIPv6
 
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  is_ipv6:
+    equals:
+      - {get_param: [ServiceData, net_ip_version_map, {get_param: [ServiceNetMap, MysqlNetwork]}]}
+      - 6
 
 outputs:
   role_data:
@@ -78,16 +96,7 @@ outputs:
             # in tripleo-puppet-elements.
             mysql::server::package_name: 'mariadb-galera-server'
             mysql::server::manage_config_file: true
-            mysql_ipv6: {get_param: MysqlIPv6}
-            tripleo::mysql::firewall_rules:
-              '104 mysql galera':
-                dport:
-                  - 873
-                  - 3306
-                  - 4444
-                  - 4567
-                  - 4568
-                  - 9200
+            mysql_ipv6: {if: [is_ipv6, true, false]}
             mysql_max_connections: {get_param: MysqlMaxConnections}
             mysql::server::root_password:
               yaql:
@@ -98,6 +107,7 @@ outputs:
                     - {get_param: [DefaultPasswords, mysql_root_password]}
             mysql_clustercheck_password: {get_param: MysqlClustercheckPassword}
             enable_galera: {get_param: EnableGalera}
+            mysql_auth_ed25519: {get_param: EnableMysqlAuthEd25519}
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -153,7 +163,7 @@ outputs:
                       NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
             - {}
       step_config: |
-        include ::tripleo::profile::base::database::mysql
+        include tripleo::profile::base::database::mysql
       metadata_settings:
         if:
           - internal_tls_enabled

@@ -41,6 +41,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   NovaWorkers:
     default: 0
     description: Number of workers for Nova services.
@@ -52,12 +58,6 @@ parameters:
     description: The password for the nova service and db account
     type: string
     hidden: true
-  NovaEnableNUMALiveMigration:
-    default: false
-    description: Whether to enable or not the live migration for NUMA topology instances.
-    type: boolean
-    tags:
-      - role_specific
 
 conditions:
   nova_workers_zero: {equals : [{get_param: NovaWorkers}, 0]}
@@ -86,18 +86,6 @@ resources:
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
-  RoleParametersValue:
-    type: OS::Heat::Value
-    properties:
-      type: json
-      value:
-        map_replace:
-          - map_replace:
-            - nova::workarounds::enable_numa_live_migration: NovaEnableNUMALiveMigration
-            - values: {get_param: [RoleParameters]}
-          - values:
-              NovaEnableNUMALiveMigration: {get_param: NovaEnableNUMALiveMigration}
-
 outputs:
   role_data:
     description: Role data for the Nova Conductor service.
@@ -108,7 +96,6 @@ outputs:
         map_merge:
           - {get_attr: [NovaBase, role_data, config_settings]}
           - {get_attr: [NovaLogging, config_settings]}
-          - {get_attr: [RoleParametersValue, value]}
           -
             if:
             - nova_workers_zero
@@ -172,6 +159,8 @@ outputs:
                   - /var/lib/config-data/nova/etc/nova/:/etc/nova/:ro
             user: root
             command: "/usr/bin/bootstrap_host_exec nova_conductor su nova -s /bin/bash -c '/usr/bin/nova-manage db sync'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           nova_conductor:
             image: *nova_conductor_image
@@ -185,32 +174,26 @@ outputs:
                 - {get_attr: [NovaLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/nova_conductor.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/nova/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/nova:/var/lib/kolla/config_files/src:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       deploy_steps_tasks:
-        - name: validate nova conductor container state
+        - name: validate nova-conductor container state
+          podman_container_info:
+            name: nova_conductor
+          register: nova_conductor_infos
+          failed_when:
+            - nova_conductor_infos.containers.0.Healthcheck.Status is defined
+            - "'healthy' not in nova_conductor_infos.containers.0.Healthcheck.Status"
+          retries: 10
+          delay: 30
+          tags:
+            - opendev-validation
+            - opendev-validation-nova
           when:
             - container_cli == 'podman'
             - not container_healthcheck_disabled
             - step|int == 5
-          tags:
-            - opendev-validation
-            - opendev-validation-nova
-          block:
-            - name: Get nova-conductor healthcheck status
-              register: nova_conductor_healthcheck_state
-              systemd:
-                name: tripleo_nova_conductor_healthcheck
-              retries: 10
-              delay: 30
-              until: nova_conductor_healthcheck_state.status.ExecMainPID != '0' and
-                nova_conductor_healthcheck_state.status.ActiveState in ['inactive', 'failed']
-              ignore_errors: yes
-            - name: Fail if nova-conductor healthcheck report failed status
-              fail:
-                msg: nova-conductor isn't working (healthcheck failed)
-              when: nova_conductor_healthcheck_state.status.ExecMainStatus != '0'
       host_prep_tasks:
         list_concat:
           - {get_attr: [NovaLogging, host_prep_tasks]}
@@ -220,6 +203,15 @@ outputs:
                 persistent: yes
                 state: yes
       external_upgrade_tasks:
+        - when: step|int == 1
+          block:
+            - name: Online data migration for Nova
+              command: "{{ container_cli }} exec nova_conductor nova-manage db online_data_migrations"
+              delegate_to: "{{ groups['nova_conductor'][0] }}"
+              become: true
+              tags:
+                - online_upgrade
+                - online_upgrade_nova
         - when:
             - step|int == 1
           tags:
@@ -229,26 +221,8 @@ outputs:
           block:
             - name: Stop nova conductor container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - nova_conductor
                 tripleo_delegate_to: "{{ groups['nova_conductor'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if nova_conductor is deployed
-              command: systemctl is-enabled --quiet openstack-nova-conductor
-              ignore_errors: True
-              register: nova_conductor_enabled_result
-            - name: Set fact nova_conductor_enabled
-              set_fact:
-                nova_conductor_enabled: "{{ nova_conductor_enabled_result.rc == 0 }}"
-        - name: Stop and disable nova_conductor service
-          service: name=openstack-nova-conductor state=stopped
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - nova_conductor_enabled|bool

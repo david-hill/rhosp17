@@ -54,7 +54,7 @@ outputs:
         config_volume: iscsid
         puppet_tags: iscsid_config
         step_config: |
-          include ::tripleo::profile::base::iscsid
+          include tripleo::profile::base::iscsid
         config_image: {get_param: ContainerIscsidConfigImage}
         volumes:
           # NOTE(bogdando) Containerized or running on baremetal services
@@ -99,12 +99,12 @@ outputs:
           file:
             path: /etc/iscsi
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: ensure /var/lib/iscsi exists
           file:
             path: /var/lib/iscsi
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: stat /lib/systemd/system/iscsid.socket
           stat: path=/lib/systemd/system/iscsid.socket
           register: stat_iscsid_socket
@@ -113,7 +113,7 @@ outputs:
           when: stat_iscsid_socket.stat.exists
         - name: Check if iscsi.service is enabled
           command: systemctl is-enabled --quiet iscsi.service
-          ignore_errors: True
+          failed_when: false
           register: iscsi_service_enabled_result
         - name: Stop iscsi.service
           service: name=iscsi.service state=stopped enabled=no

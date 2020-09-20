@@ -71,6 +71,10 @@ parameters:
     description: Enable Neutron DVR.
     default: ''
     type: string
+  NeutronEnableIgmpSnooping:
+    description: Enable IGMP Snooping.
+    type: boolean
+    default: false
   OVNMetadataEnabled:
     description: Whether Metadata Service has to be enabled
     type: boolean
@@ -103,6 +107,15 @@ parameters:
     type: string
     tags:
       - role_specific
+  OVNEmitNeedToFrag:
+    type: boolean
+    default: false
+    description: Configure OVN to emit "need to frag" packets in case of
+                 MTU mismatch. Before enabling this configuration make sure
+                 that it's supported by the host kernel (version >= 5.2) or
+                 by checking the output of the following command
+                 'ovs-appctl -t ovs-vswitchd dpif/show-dp-features
+                 br-int | grep "Check pkt length action"'.
 
 conditions:
   neutron_dvr_unset: {equals : [{get_param: NeutronEnableDVR}, '']}
@@ -140,9 +153,11 @@ outputs:
             neutron::plugins::ml2::ovn::vif_type: {get_param: OVNVifType}
             neutron::plugins::ml2::ovn::ovn_metadata_enabled: {get_param: OVNMetadataEnabled}
             neutron::server::qos_notification_drivers: {get_param: OVNQosDriver}
+            neutron::server::igmp_snooping_enable: {get_param: NeutronEnableIgmpSnooping}
             neutron::plugins::ml2::max_header_size: {get_param: NeutronGeneveMaxHeaderSize}
             neutron::plugins::ml2::ovn::dns_servers: {get_param: OVNDnsServers}
             neutron::plugins::ml2::tenant_network_types: {get_param: NeutronNetworkType}
+            neutron::plugins::ml2::ovn::ovn_emit_need_to_frag: {get_param: OVNEmitNeedToFrag}
           - if:
               - internal_tls_enabled
               -
@@ -170,6 +185,6 @@ outputs:
               - {}
 
       step_config: |
-        include ::tripleo::profile::base::neutron::plugins::ml2
+        include tripleo::profile::base::neutron::plugins::ml2
       metadata_settings:
         get_attr: [NeutronMl2Base, role_data, metadata_settings]

@@ -1,6 +1,5 @@
 resource_registry:
   OS::TripleO::Docker::NeutronMl2PluginBase:   ../../deployment/neutron/neutron-plugin-ml2.yaml
-  OS::TripleO::Services::NeutronServer: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronApi: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronCorePlugin: ../../deployment/neutron/neutron-plugin-ml2-container-puppet.yaml
   OS::TripleO::Services::NeutronMetadataAgent: ../../deployment/neutron/neutron-metadata-container-puppet.yaml
@@ -16,7 +15,6 @@ resource_registry:
   OS::TripleO::Services::CinderApi: OS::Heat::None
   OS::TripleO::Services::CinderScheduler: OS::Heat::None
   OS::TripleO::Services::CinderBackup: OS::Heat::None
-  OS::TripleO::Services::CinderBackendVRTSHyperScale: OS::Heat::None
   OS::TripleO::Services::Horizon: OS::Heat::None
   OS::TripleO::Services::NovaMigrationTarget: OS::Heat::None
   # Disable OVN services
@@ -30,9 +28,11 @@ parameter_defaults:
   NeutronMechanismDrivers: ['openvswitch']
   NeutronTypeDrivers: 'vxlan,vlan,flat,gre'
   NeutronNetworkType: 'vxlan'
+  NeutronPluginExtensions: "qos,port_security"
   NeutronServicePlugins: 'router,qos,segments,trunk'
   NeutronVniRanges: ['1:4094', ]
   NeutronEnableDVR: false
+  NeutronL3HA: true
   KernelIpNonLocalBind: 0
   Debug: true
   DockerPuppetDebug: True

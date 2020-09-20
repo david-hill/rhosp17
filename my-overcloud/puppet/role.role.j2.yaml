@@ -374,6 +374,7 @@ resources:
           - '_'
           - - {get_attr: [{{server_resource_name}}, name]}
             - {{network.name}}
+      DnsName: {get_attr: [{{server_resource_name}}, name]}
       ControlPlaneIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
       FixedIPs:
         if:
@@ -531,17 +532,8 @@ resources:
           short:
             - {get_attr: [{{server_resource_name}}, name]}
 
-  PreNetworkConfig:
-    type: OS::TripleO::{{role.name}}::PreNetworkConfig
-    properties:
-      server: {get_resource: {{server_resource_name}}}
-      RoleParameters: {get_param: RoleParameters}
-      ServiceNames: {get_param: ServiceNames}
-      deployment_actions: {get_attr: [DeploymentActions, value]}
-
   # Resource for site-specific injection of root certificate
   NodeTLSCAData:
-    depends_on: PreNetworkConfig
     type: OS::TripleO::NodeTLSCAData
     properties:
       server: {get_resource: {{server_resource_name}}}
@@ -589,6 +581,7 @@ resources:
   {%- endfor %}
         fqdn_ctlplane: {get_attr: [NetHostMap, value, ctlplane, fqdn]}
         fqdn_canonical: {get_attr: [NetHostMap, value, canonical, fqdn]}
+        hostname_resolve_network: {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}
 
 outputs:
   ansible_host_vars_map:
@@ -640,27 +633,32 @@ outputs:
             HOSTNAME: {get_attr:[{{server_resource_name}}, name]}
   hosts_entry:
     value:
-      str_replace:
-        template: |
-          PRIMARYIP PRIMARYHOST.DOMAIN PRIMARYHOST
+      - str_replace:
+          template: PRIMARYIP PRIMARYHOST.DOMAIN PRIMARYHOST
+          params:
+            PRIMARYIP: {get_attr: [NetIpMap, net_ip_map, {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}]}
+            DOMAIN: {get_param: CloudDomain}
+            PRIMARYHOST: {get_attr: [{{server_resource_name}}, name]}
   {%- for network in networks %}
   {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
-          {{network.name}}IP {{network.name}}HOST.DOMAIN {{network.name}}HOST
+      - str_replace:
+          template: {{network.name}}IP {{network.name}}HOST.DOMAIN {{network.name}}HOST
+          params:
+            DOMAIN: {get_param: CloudDomain}
+          {%- for network in networks %}
+          {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
+            {{network.name}}IP: {get_attr: [{{network.name}}Port, ip_address]}
+            {{network.name}}HOST: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower())}}, short]}
+          {%- endif %}
+          {%- endfor %}
   {%- endif %}
   {%- endfor %}
-          CTLPLANEIP CTLPLANEHOST.DOMAIN CTLPLANEHOST
-        params:
-          PRIMARYIP: {get_attr: [NetIpMap, net_ip_map, {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}]}
-          DOMAIN: {get_param: CloudDomain}
-          PRIMARYHOST: {get_attr: [{{server_resource_name}}, name]}
-  {%- for network in networks %}
-  {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
-          {{network.name}}IP: {get_attr: [{{network.name}}Port, ip_address]}
-          {{network.name}}HOST: {get_attr: [NetHostMap, value, {{network.name_lower|default(network.name.lower())}}, short]}
-  {%- endif %}
-  {%- endfor %}
-          CTLPLANEIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
-          CTLPLANEHOST: {get_attr: [NetHostMap, value, ctlplane, short]}
+      - str_replace:
+          template: CTLPLANEIP CTLPLANEHOST.DOMAIN CTLPLANEHOST
+          params:
+            DOMAIN: {get_param: CloudDomain}
+            CTLPLANEIP: {get_attr: [{{server_resource_name}}, networks, ctlplane, 0]}
+            CTLPLANEHOST: {get_attr: [NetHostMap, value, ctlplane, short]}
   nova_server_resource:
     description: Heat resource handle for {{role.name}} server
     value:

@@ -219,10 +219,8 @@ parameters:
   {{role.name}}AnyErrorsFatal:
     default: yes
     type: string
-  {#- We generally won't want any failures on HA Controller roles, 15% will cause any 1 node to fail the deploy, #}
-  {#- for a 3 or 5 node Role, making it a fairly safe default. #}
   {{role.name}}MaxFailPercentage:
-    default: 15
+    default: 0
     type: number
   {{role.name}}Count:
     description: Number of {{role.name}} nodes to deploy
@@ -271,6 +269,11 @@ parameters:
   {{role.name}}Parameters:
     type: json
     description: Optional Role Specific parameters to be provided to service
+    default: {}
+
+  {{role.name}}ExtraGroupVars:
+    type: json
+    description: Optional extra Ansible group vars
     default: {}
 {% endfor %}
 
@@ -399,43 +402,41 @@ resources:
   VipHosts:
     type: OS::Heat::Value
     properties:
-      type: string
+      type: comma_delimited_list
       value:
-        list_join:
-        - "\n"
-        - - str_replace:
-              template: IP  HOST
-              params:
-                IP: {get_attr: [VipMap, net_ip_map, ctlplane]}
-                HOST: {get_param: CloudNameCtlplane}
+        - str_replace:
+            template: IP  HOST
+            params:
+              IP: {get_attr: [VipMap, net_ip_map, ctlplane]}
+              HOST: {get_param: CloudNameCtlplane}
 {%- for network in networks if network.vip|default(false) and network.enabled|default(true) %}
   {%- if network.name == 'External' %}
   # Special case the External hostname param, which is CloudName
-          - str_replace:
-              template: IP  HOST
-              params:
-                IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
-                HOST: {get_param: CloudName}
+        - str_replace:
+            template: IP  HOST
+            params:
+              IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
+              HOST: {get_param: CloudName}
   {%- elif network.name == 'InternalApi' %}
   # Special case the Internal API hostname param, which is CloudNameInternal
-          - str_replace:
-              template: IP  HOST
-              params:
-                IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
-                HOST: {get_param: CloudNameInternal}
+        - str_replace:
+            template: IP  HOST
+            params:
+              IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
+              HOST: {get_param: CloudNameInternal}
   {%- elif network.name == 'StorageMgmt' %}
   # Special case StorageMgmt hostname param, which is CloudNameStorageManagement
-          - str_replace:
-              template: IP  HOST
-              params:
-                IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
-                HOST: {get_param: CloudNameStorageManagement}
+        - str_replace:
+            template: IP  HOST
+            params:
+              IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
+              HOST: {get_param: CloudNameStorageManagement}
   {%- else %}
-          - str_replace:
-              template: IP  HOST
-              params:
-                IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
-                HOST: {get_param: CloudName{{network.name}}}
+        - str_replace:
+            template: IP  HOST
+            params:
+              IP: {get_attr: [VipMap, net_ip_map, {{network.name_lower}}]}
+              HOST: {get_param: CloudName{{network.name}}}
   {%- endif %}
 {%- endfor %}
 
@@ -463,6 +464,18 @@ resources:
           # NOTE(hjensas): When ctlplane network and subnets are created by the
           # undercloud installer, the subnet cidrs are added as tags.
           - ctlplane: {get_attr: [ControlVirtualIP, network, tags]}
+        - keys:
+            ctlplane: {get_param: NeutronControlPlaneID}
+
+  NetIpVersionMapValue:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        map_replace:
+        - map_merge:
+          - {get_attr: [Networks, net_ip_version_map]}
+          - ctlplane: {get_attr: [ControlVirtualIP, subnets, 0, ip_version]}
         - keys:
             ctlplane: {get_param: NeutronControlPlaneID}
 
@@ -544,6 +557,8 @@ resources:
       ServiceNetMap: {get_attr: [ServiceNetMap, service_net_map]}
       ServiceData:
         net_cidr_map: {get_attr: [NetCidrMapValue, value]}
+        net_vip_map: {get_attr: [VipMap, net_ip_map]}
+        net_ip_version_map: {get_attr: [NetIpVersionMapValue, value]}
       EndpointMap: {get_attr: [EndpointMapData, value]}
       DefaultPasswords: {get_attr: [DefaultPasswords, passwords]}
       RoleName: {{role.name}}
@@ -587,7 +602,8 @@ resources:
         hieradata_files:
           - '"%{::uuid}"'
           - fqdn
-          - docker_puppet # Optionally provided by container-puppet.py
+          - docker_puppet # Optionally provided by container-puppet.sh
+          - ansible_managed
           - heat_config_%{::deploy_config_name}
           - config_step
           - role_extraconfig
@@ -596,9 +612,9 @@ resources:
           - service_names
           - service_configs
           - cloud_domain
-          - bootstrap_node # provided by tripleo-hieradata
-          - all_nodes # provided by tripleo-hieradata
-          - vip_data # provided by tripleo-hieradata
+          - bootstrap_node # provided by tripleo_hieradata
+          - all_nodes # provided by tripleo_hieradata
+          - vip_data # provided by tripleo_hieradata
           - net_ip_map
           - '"%{::osfamily}"'
           # The following are required for compatibility with the Controller role
@@ -659,12 +675,13 @@ resources:
     type: OS::TripleO::Network::Ports::NetIpListMap
     properties:
       ControlPlaneIpList: {get_attr: [{{role.name}}, ip_address]}
-  {%- for network in networks %}
-    {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
+  {%- for network in networks if network.enabled|default(true) and network.name in role.networks|default([]) %}
       {{network.name}}IpList: {get_attr: [{{role.name}}, {{network.name_lower}}_ip_address]}
-    {%- else %}
-      {{network.name}}IpList: {get_attr: [{{role.name}}, ip_address]}
-    {%- endif %}
+  {%- endfor %}
+      RoleNetworks:
+        - ctlplane
+  {%- for network in networks if network.enabled|default(true) and network.name in role.networks|default([]) %}
+        - {{network.name_lower}}
   {%- endfor %}
       EnabledServices: {get_attr: [{{role.name}}ServiceNames, value]}
       ServiceNetMap: {get_attr: [ServiceNetMap, service_net_map_lower]}
@@ -789,34 +806,22 @@ resources:
             for_each:
               hostname: {get_param: DeploymentServerBlacklist}
 
-  HostsValue:
-    type: OS::Heat::Value
-    properties:
-      value:
-        list_join:
-        - "\n"
-        - {get_param: UndercloudHostsEntries}
-        - - if:
-            - add_vips_to_etc_hosts
-            - {get_attr: [VipHosts, value]}
-            - ''
-        -
-{%- for role in roles %}
-          - list_join:
-            - ""
-            - {get_attr: [{{role.name}}, hosts_entry]}
-{%- endfor %}
-        - {get_param: ExtraHostFileEntries}
-
   HostsEntryValue:
     type: OS::Heat::Value
     properties:
+      type: comma_delimited_list
       value:
-        list_join:
-          - ' '
-          - str_split:
-            - '\n'
-            - {get_attr: [HostsValue, value]}
+        list_concat_unique:
+          list_concat:
+            - - {get_param: UndercloudHostsEntries}
+            - - if:
+                - add_vips_to_etc_hosts
+                - {get_attr: [VipHosts, value]}
+                - []
+{%- for role in roles %}
+            - {get_attr: [{{role.name}}, hosts_entry]}
+{%- endfor %}
+            - - {get_param: ExtraHostFileEntries}
 
   CloudNames:
     type: OS::Heat::Value
@@ -910,6 +915,8 @@ resources:
             data: {get_attr: [Networks, net_cidr_map, {{network.name_lower}}]}
         {% endif %}
         {% endfor %}
+        service_metadata_settings: {get_attr: [{{role.name}}ServiceChainRoleData, value, service_metadata_settings]}
+
 {% endfor %}
 
   ControlVirtualIP:
@@ -917,6 +924,7 @@ resources:
     type: OS::TripleO::Network::Ports::ControlPlaneVipPort
     properties:
       name: control_virtual_ip
+      dns_name: {str_split: ['.', {get_param: CloudNameCtlplane}, 0]}
       network: {get_param: NeutronControlPlaneID}
       fixed_ips:
         if:
@@ -937,6 +945,7 @@ resources:
           - {str_split: ['/', {get_attr: [ControlVirtualIP, subnets, 0, cidr]}, 1]}
       ControlPlaneNetwork: {get_param: NeutronControlPlaneID}
       PortName: redis_virtual_ip
+      DnsName: null
       NetworkName: {get_attr: [ServiceNetMap, service_net_map, RedisNetwork]}
       ServiceName: redis
       FixedIPs:
@@ -957,6 +966,7 @@ resources:
           - {str_split: ['/', {get_attr: [ControlVirtualIP, subnets, 0, cidr]}, 1]}
       ControlPlaneNetwork: {get_param: NeutronControlPlaneID}
       PortName: ovn_dbs_virtual_ip
+      DnsName: null
       NetworkName: {get_attr: [ServiceNetMap, service_net_map, OvnDbsNetwork]}
       ServiceName: ovn_dbs
       FixedIPs:
@@ -969,24 +979,9 @@ resources:
   {%- if network.name == 'External' %}
   # The public VIP is on the External net, falls back to ctlplane
   PublicVirtualIP:
-    depends_on: [Networks, ServiceNetMap]
-    type: OS::TripleO::Network::Ports::ExternalVipPort
-    properties:
-      ControlPlaneIP: {get_attr: [ControlVirtualIP, fixed_ips, 0, ip_address]}
-      ControlPlaneSubnetCidr:
-        if:
-          - ctlplane_subnet_cidr_set
-          - {get_param: ControlPlaneSubnetCidr}
-          - {str_split: ['/', {get_attr: [ControlVirtualIP, subnets, 0, cidr]}, 1]}
-      ControlPlaneNetwork: {get_param: NeutronControlPlaneID}
-      PortName: public_virtual_ip
-      FixedIPs:
-        if:
-        - public_virtual_fixed_ip_set
-        - {get_param: PublicVirtualFixedIPs}
-        - [{subnet: {get_attr: [ServiceNetMap, vip_subnet_map, {{network.name}}]}}]
   {%- else %}
   {{network.name}}VirtualIP:
+  {%- endif %}
     depends_on: [Networks, ServiceNetMap]
     type: OS::TripleO::Network::Ports::{{network.name}}VipPort
     properties:
@@ -996,13 +991,29 @@ resources:
           - ctlplane_subnet_cidr_set
           - {get_param: ControlPlaneSubnetCidr}
           - {str_split: ['/', {get_attr: [ControlVirtualIP, subnets, 0, cidr]}, 1]}
+      {%- if network.name == 'External' %}
+      PortName: public_virtual_ip
+      DnsName: {str_split: ['.', {get_param: CloudName}, 0]}
+      {%- else %}
       PortName: {{network.name_lower}}_virtual_ip
+      {%- endif %}
+      {%- if network.name == 'InternalApi' %}
+      DnsName: {str_split: ['.', {get_param: CloudNameInternal}, 0]}
+      {%- elif network.name == 'StorageMgmt' %}
+      DnsName: {str_split: ['.', {get_param: CloudNameStorageManagement}, 0]}
+      {%- elif network.name not in ['External', 'InternalApi', 'StorageMgmt'] %}
+      DnsName: {str_split: ['.', {get_param: CloudName{{network.name}}}, 0]}
+      {%- endif %}
       FixedIPs:
         if:
+        {%- if network.name == 'External' %}
+        - public_virtual_fixed_ip_set
+        - {get_param: PublicVirtualFixedIPs}
+        {%- else %}
         - {{network.name_lower}}_virtual_fixed_ip_set
         - {get_param: {{network.name}}VirtualFixedIPs}
+        {%- endif %}
         - [{subnet: {get_attr: [ServiceNetMap, vip_subnet_map, {{network.name}}]}}]
-  {% endif %}
 {%- endfor %}
 
   VipMap:
@@ -1121,6 +1132,18 @@ resources:
           - redis: {get_attr: [RedisVirtualIP, ip_address]}
           - ovn_dbs: {get_attr: [OVNDBsVirtualIP, ip_address]}
       CloudNames: {get_attr: [CloudNames, value]}
+      UndercloudHostsEntries: {get_param: UndercloudHostsEntries}
+      ExtraHostsEntries: {get_param: ExtraHostFileEntries}
+      VipHostsEntries:
+        if:
+          - add_vips_to_etc_hosts
+          - {get_attr: [VipHosts, value]}
+          - []
+      KeystoneResourcesConfigs:
+        map_merge:
+{% for role in roles %}
+          - get_attr: [{{role.name}}ServiceChainRoleData, value, keystone_resources]
+{% endfor %}
 
 outputs:
   ManagedEndpoints:
@@ -1149,10 +1172,9 @@ outputs:
       hostname-based access to the deployed nodes (useful for testing without
       setting up a DNS).
     value:
-      list_join:
-      - "\n"
-      - - {get_attr: [HostsEntryValue, value]}
-      - - {get_attr: [VipHosts, value]}
+      list_concat_unique:
+        - {get_attr: [HostsEntryValue, value]}
+        - {get_attr: [VipHosts, value]}
   EnabledServices:
     description: The services enabled on each role
     value:
@@ -1187,6 +1209,7 @@ outputs:
           neutron_physical_bridge_name: {get_param: NeutronPhysicalBridge}
           neutron_public_interface_name: {get_param: NeutronPublicInterface}
           network_deployment_actions: {get_attr: [{{role.name}}NetworkDeploymentActionsValue, value]}
+        - {get_param: {{role.name}}ExtraGroupVars}
 {%- endfor %}
   RoleNetHostnameMap:
     description: Mapping of each network to a list of hostnames for each role

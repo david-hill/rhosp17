@@ -78,6 +78,11 @@ parameters:
     description: The timeout for both the vendordata dynamic connect and read
                  values.
     type: number
+  NovajoinPolicies:
+    description: |
+      A hash of policies to configure for Novajoin.
+    default: {}
+    type: json
 
 resources:
 
@@ -89,18 +94,33 @@ outputs:
     description: Role data for the novajoin API role.
     value:
       service_name: novajoin
+      firewall_rules:
+        '119 novajoin':
+          dport:
+            - 9090
+      keystone_resources:
+        novajoin:
+          endpoints:
+            public: {get_param: [EndpointMap, NovajoinPublic, uri]}
+            internal: {get_param: [EndpointMap, NovajoinInternal, uri]}
+            admin: {get_param: [EndpointMap, NovajoinAdmin, uri]}
+          users:
+            novajoin:
+              password: {get_param: NovajoinPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'compute-vendordata-plugin'
       config_settings:
         tripleo::profile::base::novajoin::oslomsg_rpc_password: {get_param: RpcPassword}
         tripleo::profile::base::novajoin::oslomsg_rpc_port: {get_param: RabbitClientPort}
         tripleo::profile::base::novajoin::oslomsg_rpc_username: {get_param: RabbitUserName}
         tripleo::profile::base::novajoin::oslomsg_use_ssl: {get_param: RabbitClientUseSSL}
         tripleo::profile::base::novajoin::service_password: {get_param: NovajoinPassword}
-        nova::metadata::novajoin::api::bind_address:
+        nova::metadata::novajoin::api::bind_address: &novajoin_address
           str_replace:
-             template:
-               "%{hiera('$NETWORK')}"
-             params:
-               $NETWORK:  {get_param: [ServiceNetMap, NovajoinNetwork]}
+            template:
+              "%{hiera('novajoin_network')}"
+            params:
+              novajoin_network: {get_param: [ServiceNetMap, NovajoinNetwork]}
         nova::metadata::novajoin::api::join_listen_port: 9090
         nova::metadata::novajoin::api::project_name: service
         nova::metadata::novajoin::api::keystone_auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
@@ -110,25 +130,14 @@ outputs:
         # kerberos via puppet.
         nova::metadata::novajoin::api::configure_kerberos: true
         nova::metadata::novajoin::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-        nova::metadata::novajoin::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+        nova::metadata::novajoin::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
         nova::metadata::novajoin::authtoken::password: {get_param: NovajoinPassword}
         nova::metadata::novajoin::authtoken::project_name: 'service'
-        tripleo::novajoin::firewall_rules:
-          '119 novajoin':
-            dport:
-              - 9090
+        nova::metadata::novajoin::authtoken::region_name: {get_param: KeystoneRegion}
+        nova::metadata::novajoin::policy::policies: {get_param: NovajoinPolicies}
       service_config_settings:
-        keystone:
-          nova::metadata::novajoin::auth::tenant: 'service'
-          nova::metadata::novajoin::auth::password: {get_param: NovajoinPassword}
-          nova::metadata::novajoin::auth::region: {get_param: KeystoneRegion}
         nova_metadata: &nova_vendordata
-          novajoin_address:
-            str_replace:
-               template:
-                 "%{hiera('$NETWORK')}"
-               params:
-                 $NETWORK:  {get_param: [ServiceNetMap, NovajoinNetwork]}
+          novajoin_address: *novajoin_address
           nova::vendordata::vendordata_jsonfile_path: '/etc/novajoin/cloud-config-novajoin.json'
           nova::vendordata::vendordata_providers: ['StaticJSON', 'DynamicJSON']
           # TODO(jaosorior): Add TLS support here. Novajoin is currently not
@@ -137,7 +146,11 @@ outputs:
           # this is only meant to be used in a single node containerized
           # undercloud. Multinode support will come later.
           nova::vendordata::vendordata_dynamic_targets:
-            - "join@http://%{hiera('novajoin_address')}:9090/v1/"
+            - str_replace:
+                template:
+                  "join@http://%{hiera('novajoin_network')}:9090/v1/"
+                params:
+                  novajoin_network: {get_param: [ServiceNetMap, NovajoinNetwork]}
           nova::vendordata::vendordata_dynamic_failure_fatal: true
           nova::vendordata::vendordata_dynamic_auth_auth_type: 'password'
           nova::vendordata::vendordata_dynamic_auth_auth_url:
@@ -163,13 +176,23 @@ outputs:
       puppet_config:
         config_volume: novajoin
         puppet_tags: novajoin_config
-        step_config: include ::tripleo::profile::base::novajoin
+        step_config: include tripleo::profile::base::novajoin
         config_image: {get_param: ContainerNovajoinConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/novajoin_server.json:
           command: novajoin-server --config-file /etc/novajoin/join.conf
+          config_files:
+            - source: "/var/lib/kolla/config_files/src/etc/novajoin/join.conf"
+              dest: "/etc/novajoin/"
+              merge: false
+              preserve_properties: true
         /var/lib/kolla/config_files/novajoin_notifier.json:
           command: novajoin-notify --config-file /etc/novajoin/join.conf
+          config_files:
+            - source: "/var/lib/kolla/config_files/src/etc/novajoin/join.conf"
+              dest: "/etc/novajoin/"
+              merge: false
+              preserve_properties: true
       docker_config:
         step_4:
           novajoin_server:
@@ -183,7 +206,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/novajoin_server.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/novajoin/etc/novajoin/join.conf:/etc/novajoin/join.conf:z
+                  - /var/lib/config-data/puppet-generated/novajoin:/var/lib/kolla/config_files/src:ro
                   - /etc/ipa/:/etc/ipa/:ro
                   - /etc/novajoin/krb5.keytab:/etc/novajoin/krb5.keytab:ro
                   - /var/log/containers/novajoin:/var/log/novajoin
@@ -201,7 +224,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/novajoin_notifier.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/novajoin/etc/novajoin/join.conf:/etc/novajoin/join.conf:Z
+                  - /var/lib/config-data/puppet-generated/novajoin:/var/lib/kolla/config_files/src:ro
                   - /etc/ipa/:/etc/ipa/:ro
                   - /etc/novajoin/krb5.keytab:/etc/novajoin/krb5.keytab:ro
                   - /var/log/containers/novajoin:/var/log/novajoin
@@ -226,22 +249,15 @@ outputs:
         - name: Set FreeIPA OTP fact
           set_fact:
             ipa_otp: {get_param: NovajoinIpaOtp}
-          no_log: true
+          no_log: "{{ hide_sensitive_logs | bool }}"
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/novajoin, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/novajoin, 'setype': svirt_sandbox_file_t }
-        - name: novajoin logs readme
-          copy:
-            dest: /var/log/novajoin/readme.txt
-            content: |
-              Log files from novajoin containers can be found under
-              /var/log/containers/novajoin
-          ignore_errors: true
+            - { 'path': /var/log/containers/novajoin, 'setype': container_file_t, 'mode': '0750' }
         - name: Enroll to FreeIPA
           command: ipa-client-install -U --password={{ ipa_otp }}
           args:

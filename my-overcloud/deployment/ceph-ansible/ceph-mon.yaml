@@ -30,15 +30,6 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
-  CephMonKey:
-    description: The Ceph monitors key. Can be created with ceph-authtool --gen-print-key.
-    type: string
-    hidden: true
-  CephAdminKey:
-    default: ''
-    description: The Ceph admin client key. Can be created with ceph-authtool --gen-print-key.
-    type: string
-    hidden: true
   CephValidationRetries:
     type: number
     default: 40
@@ -71,16 +62,30 @@ resources:
     properties:
       type: json
       value:
-        vars:
-          monitor_secret: {get_param: CephMonKey}
-          admin_secret: {get_param: CephAdminKey}
+        vars: {}
 
 outputs:
   role_data:
     description: Role data for the Ceph Monitor service.
     value:
       service_name: ceph_mon
-      upgrade_tasks: []
+      firewall_rules:
+        '110 ceph_mon':
+          dport:
+            list_concat:
+              - - 6789
+              - - 3300
+              - if:
+                - dashboard_enabled
+                - - '9100'
+                - []
+      service_config_settings:
+        collectd:
+          tripleo.collectd.plugins.ceph_osd:
+            - ceph
+          collectd::plugin::ceph::daemons: []
+      upgrade_tasks: {get_attr: [CephBase, role_data, upgrade_tasks]}
+      post_upgrade_tasks: {get_attr: [CephBase, role_data, post_upgrade_tasks]}
       puppet_config:
         config_image: ''
         config_volume: ''
@@ -91,7 +96,10 @@ outputs:
         - {get_attr: [CephBase, role_data, external_deploy_tasks]}
         - - name: ceph_mon_external_deploy_init
             when: step|int == 1
-            tags: ceph
+            tags:
+              - ceph
+              - ceph_fstobs
+              - ceph_systemd
             block:
               - name: set ceph-ansible group vars mons
                 set_fact:
@@ -102,16 +110,3 @@ outputs:
                   content: "{{ceph_ansible_group_vars_mons|to_nice_yaml}}"
       external_update_tasks: {get_attr: [CephBase, role_data, external_update_tasks]}
       external_upgrade_tasks: {get_attr: [CephBase, role_data, external_upgrade_tasks]}
-      config_settings:
-        map_merge:
-        - tripleo::ceph_mon::firewall_rules:
-            '110 ceph_mon':
-              dport:
-                list_concat:
-                  - - 6789
-                  - - 3300
-                  - if:
-                    - dashboard_enabled
-                    - - '9100'
-                    - []
-        - {}

@@ -74,6 +74,10 @@ parameters:
       e.g. { heat-context_is_admin: { key: context_is_admin, value: 'role:admin' } }
     default: {}
     type: json
+  HeatStackDomainAdminPassword:
+    description: Password for heat_stack_domain_admin user.
+    type: string
+    hidden: true
 
 conditions:
 
@@ -114,6 +118,31 @@ outputs:
     description: Role data for the Heat API role.
     value:
       service_name: heat_api
+      firewall_rules:
+        '125 heat_api':
+          dport:
+            - 8004
+            - 13004
+      keystone_resources:
+        heat:
+          endpoints:
+            public: {get_param: [EndpointMap, HeatPublic, uri]}
+            internal: {get_param: [EndpointMap, HeatInternal, uri]}
+            admin: {get_param: [EndpointMap, HeatAdmin, uri]}
+          users:
+            heat:
+              password: {get_param: HeatPassword}
+            heat_stack_domain_admin:
+              password: {get_param: HeatStackDomainAdminPassword}
+              roles:
+                - admin
+              domain: heat_stack
+          region: {get_param: KeystoneRegion}
+          service: 'orchestration'
+          roles:
+            - heat_stack_user
+          domains:
+            - heat_stack
       monitoring_subscription: {get_param: MonitoringSubscriptionHeatApi}
       config_settings:
         map_merge:
@@ -121,11 +150,6 @@ outputs:
           - get_attr: [HeatApiLogging, config_settings]
           - get_attr: [ApacheServiceBase, role_data, config_settings]
           - apache::default_vhost: false
-            tripleo::heat_api::firewall_rules:
-              '125 heat_api':
-                dport:
-                  - 8004
-                  - 13004
             heat::api::bind_host:
               str_replace:
                 template:
@@ -133,6 +157,7 @@ outputs:
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, HeatApiNetwork]}
             heat::wsgi::apache_api::ssl: {get_param: EnableInternalTLS}
+            heat::wsgi::apache_api::vhost_custom_fragment: 'Timeout 600'
             heat::policy::policies: {get_param: HeatApiPolicies}
             heat::api::service_name: 'httpd'
             # NOTE: bind IP is found in hiera replacing the network name with the local node IP
@@ -161,21 +186,12 @@ outputs:
         rsyslog:
           tripleo_logging_sources_heat_api:
             - {get_param: HeatApiLoggingSource}
-        keystone:
-          map_merge:
-            - get_attr: [HeatBase, role_data, service_config_settings, keystone]
-            - heat::keystone::auth::tenant: 'service'
-              heat::keystone::auth::public_url: {get_param: [EndpointMap, HeatPublic, uri]}
-              heat::keystone::auth::internal_url: {get_param: [EndpointMap, HeatInternal, uri]}
-              heat::keystone::auth::admin_url: {get_param: [EndpointMap, HeatAdmin, uri]}
-              heat::keystone::auth::password: {get_param: HeatPassword}
-              heat::keystone::auth::region: {get_param: KeystoneRegion}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: heat_api
         puppet_tags: heat_config,file,concat,file_line
         step_config: |
-          include ::tripleo::profile::base::heat::api
+          include tripleo::profile::base::heat::api
         config_image: {get_param: ContainerHeatApiConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/heat_api.json:
@@ -183,6 +199,13 @@ outputs:
           config_files:
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
+              merge: false
+              preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -225,17 +248,15 @@ outputs:
                 - {get_param: HeatApiOptVolumes}
                 -
                   - /var/lib/kolla/config_files/heat_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/heat_api/:/var/lib/kolla/config_files/src:ro
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                  - /var/lib/config-data/puppet-generated/heat_api:/var/lib/kolla/config_files/src:ro
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               map_merge:
                 - {get_param: HeatApiOptEnvVars}
@@ -254,7 +275,7 @@ outputs:
                 - {get_attr: [HeatApiLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/heat_api_cron.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/heat_api/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/heat_api:/var/lib/kolla/config_files/src:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks: {get_attr: [HeatApiLogging, host_prep_tasks]}
@@ -271,39 +292,9 @@ outputs:
           block:
             - name: Stop heat api container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - heat_api
                   - heat_api_cron
                 tripleo_delegate_to: "{{ groups['heat_api'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check openstack-heat-api is enabled
-              command: systemctl is-enabled openstack-heat-api
-              ignore_errors: True
-              register: heat_api_enabled_result
-            - name: Set fact heat_api_enabled
-              set_fact:
-                heat_api_enabled: "{{ heat_api_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-heat-api
-          service: name=openstack-heat-api state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - heat_api_enabled|bool
-        - name: FFU Heat package update
-          package:
-            name: 'openstack-heat*'
-            state: latest
-          when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-        - name: FFU Heat db-sync
-          command: heat-manage db_sync
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool

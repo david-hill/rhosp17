@@ -67,15 +67,16 @@ are available for containerized services.
 
  * config_settings: This section contains service specific hiera data
    can be used to generate config files for each service. This data
-   is ultimately processed via the container-puppet.py tool which
-   generates config files for each service according to the settings here.
+   is ultimately processed via the container_puppet_config module in
+   tripleo-ansible which generates config files for each service according to
+   the settings here.
 
  * kolla_config: Contains YAML that represents how to map config files
    into the kolla container. This config file is typically mapped into
    the container itself at the /var/lib/kolla/config_files/config.json
    location and drives how kolla's external config mechanisms work.
 
- * docker_config: Data that is passed to paunch tool to configure
+ * docker_config: Data that is passed to tripleo_container_manage role to configure
    a container, or step of containers at each step. See the available steps
    documented below which are implemented by TripleO's cluster deployment
    architecture. If you want the tasks executed only once for the bootstrap
@@ -107,10 +108,10 @@ are available for containerized services.
        this container.
 
  * container_puppet_tasks: This section provides data to drive the
-   container-puppet.py tool directly. The task is executed for the
+   puppet containers tooling directly. The task is executed for the
    defined steps before the corresponding docker_config's step. Puppet
    always sees the step number overrided as the step #6. It might be useful
-   for initialization of things. See container-puppet.py for formatting.
+   for initialization of things.
    Note that the tasks are executed only once for the bootstrap node per a
    role in the cluster. Make sure the puppet manifest ensures the wanted
    "at most once" semantics. That may be achieved via the
@@ -174,36 +175,6 @@ all containerized services and the updated configuration if any.
 
 Note: as pacemaker is not containerized, the points 1 and 4 happen in
 deployment/pacemaker/pacemaker-baremetal-puppet.yaml.
-
-Fast-forward Upgrade Steps
---------------------------
-
-Each service template may optionally define a `fast_forward_upgrade_tasks` key,
-which is a list of Ansible tasks to be performed during the fast-forward
-upgrade process. As with Upgrade steps each task is associated to a particular
-step provided as a variable and used along with a release variable by a basic
-conditional that determines when the task should run.
-
-Steps are broken down into two categories, prep tasks executed across all hosts
-and bootstrap tasks executed on a single host for a given role.
-
-The individual steps then correspond to the following tasks during the upgrade:
-
-Prep steps:
-
-- Step=0: Check running services
-- Step=1: Stop the service
-- Step=2: Stop the cluster
-- Step=3: Update repos
-
-Bootstrap steps:
-
-- Step=4: DB backups
-- Step=5: Pre package update commands
-- Step=6: Package updates
-- Step=7: Post package update commands
-- Step=8: DB syncs
-- Step=9: Verification
 
 Input Parameters
 ----------------
@@ -328,3 +299,11 @@ implementation of this hook needs to conform to the following:
 
 * This needs to define an output called `metadata` which will be given to the
   Nova Server resource as the instance's metadata.
+
+Keystone resources management
+-----------------------------
+
+Keystone resources, such as users, roles, domains, endpoints, services, role
+assignments, are now managed by `tripleo-keystone-resources`_ Ansible role.
+
+.. _tripleo-keystone-resources: https://docs.openstack.org/tripleo-ansible/latest/roles/role-tripleo-keystone-resources.html

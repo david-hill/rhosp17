@@ -8,7 +8,6 @@ resource_registry:
   # see https://review.opendev.org/#/c/563443
   OS::TripleO::Docker::NeutronMl2PluginBase: ../../deployment/neutron/neutron-plugin-ml2.yaml
 
-  OS::TripleO::Services::NeutronServer: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronApi: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronCorePlugin: ../../deployment/neutron/neutron-plugin-ml2-container-puppet.yaml
   OS::TripleO::Services::NeutronMetadataAgent: ../../deployment/neutron/neutron-metadata-container-puppet.yaml
@@ -21,10 +20,12 @@ resource_registry:
   OS::TripleO::Services::OVNController: OS::Heat::None
   OS::TripleO::Services::OVNDBs: OS::Heat::None
   OS::TripleO::Services::OVNMetadataAgent: OS::Heat::None
+  OS::TripleO::Network::Ports::OVNDBsVipPort: ../../network/ports/noop.yaml
 
 parameter_defaults:
 
   NeutronMechanismDrivers: ['openvswitch']
+  NeutronPluginExtensions: "qos,port_security"
 
   NeutronTypeDrivers: 'vxlan,vlan,flat,gre'
   NeutronNetworkType: 'vxlan'

@@ -53,6 +53,11 @@ parameters:
     description: Path to use when file driver is used. This could be NFS or a
       flat file.
     type: string
+  GnocchiNfsEnabled:
+    default: false
+    description: >
+      When using GnocchiBackend 'file', mount NFS share for data storage
+    type: boolean
   MonitoringSubscriptionGnocchiMetricd:
     default: 'overcloud-gnocchi-metricd'
     type: string
@@ -64,6 +69,9 @@ parameters:
     default: 30
     description: Delay between processing metrics.
     type: number
+
+conditions:
+  nfs_backend_enabled: {equals: [{get_param: GnocchiNfsEnabled}, true]}
 
 resources:
 
@@ -102,7 +110,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::base::gnocchi::metricd"
+            - - "include tripleo::profile::base::gnocchi::metricd"
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerGnocchiConfigImage}
       kolla_config:
@@ -144,12 +152,18 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/gnocchi_metricd.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/gnocchi/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/gnocchi:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/gnocchi:/var/log/gnocchi:z
                   - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
                   - str_replace:
                       template: GNOCCHI_FILE_BASE_PATH:GNOCCHI_FILE_BASE_PATH:SE_FLAGS
-                      params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}, SE_FLAGS: 'shared,z'}
+                      params:
+                        GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}
+                        SE_FLAGS:
+                          if:
+                            - nfs_backend_enabled
+                            - 'shared'
+                            - 'shared,z'
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -158,21 +172,14 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/gnocchi, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/gnocchi, 'setype': svirt_sandbox_file_t }
-        - name: gnocchi logs readme
-          copy:
-            dest: /var/log/gnocchi/readme.txt
-            content: |
-              Log files from gnocchi containers can be found under
-              /var/log/containers/gnocchi and /var/log/containers/httpd/gnocchi-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/gnocchi, 'setype': container_file_t, 'mode': '0750' }
         - name: create persistent data directory
           file:
             path: {get_param: GnocchiFileBasePath}
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: ensure ceph configurations exist
           file:
             path: /etc/ceph
@@ -188,26 +195,8 @@ outputs:
           block:
             - name: Stop gnocchi metricd container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - gnocchi_metricd
                 tripleo_delegate_to: "{{ groups['gnocchi_metricd'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-gnocchi-metricd is deployed
-              command: systemctl is-enabled --quiet openstack-gnocchi-metricd
-              ignore_errors: True
-              register: gnocchi_metricd_enabled_result
-            - name: Set fact gnocchi_metricd_enabled
-              set_fact:
-                gnocchi_metricd_enabled: "{{ gnocchi_metricd_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-gnocchi-metricd service
-          service: name=openstack-gnocchi-metricd state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - gnocchi_metricd_enabled|bool

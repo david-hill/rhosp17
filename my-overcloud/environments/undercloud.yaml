@@ -21,7 +21,7 @@ resource_registry:
   OS::TripleO::Services::NeutronCorePlugin: ../deployment/neutron/neutron-plugin-ml2-container-puppet.yaml
   OS::TripleO::Docker::NeutronMl2PluginBase: ../deployment/neutron/neutron-plugin-ml2.yaml
 
-  OS::TripleO::Services::OpenStackClients: ../deployment/clients/openstack-clients-baremetal-puppet.yaml
+  OS::TripleO::Services::OpenStackClients: ../deployment/clients/openstack-clients-baremetal-ansible.yaml
 
   # services we disable by default on the undercloud
   OS::TripleO::Services::AodhApi: OS::Heat::None
@@ -34,6 +34,7 @@ resource_registry:
   OS::TripleO::Services::GnocchiApi: OS::Heat::None
   OS::TripleO::Services::GnocchiMetricd: OS::Heat::None
   OS::TripleO::Services::GnocchiStatsd: OS::Heat::None
+  OS::TripleO::Services::Rear: OS::Heat::None
   OS::TripleO::Services::Redis: OS::Heat::None
   OS::TripleO::Services::CinderApi: OS::Heat::None
   OS::TripleO::Services::CinderScheduler: OS::Heat::None
@@ -63,7 +64,6 @@ resource_registry:
 
   # Undercloud HA services
   OS::TripleO::Services::HAproxy: OS::Heat::None
-  OS::TripleO::Services::Keepalived: OS::Heat::None
 
 parameter_defaults:
   # ensure we enable ip_forward before docker gets run
@@ -76,6 +76,7 @@ parameter_defaults:
   TokenExpiration: 14400
   EnablePackageInstall: true
   StackAction: CREATE
+  SoftwareConfigTransport: POLL_SERVER_HEAT
   NeutronTunnelTypes: []
   NeutronBridgeMappings: ctlplane:br-ctlplane
   NeutronAgentExtensions: []
@@ -94,7 +95,12 @@ parameter_defaults:
   NovaAutoDisabling: '0'
   NovaCorsAllowedOrigin: '*'
   NovaSyncPowerStateInterval: -1
-  NeutronDhcpAgentsPerNetwork: 2
+  # Overwrite compute_server_user policy to allow any user with role admin
+  # to post to novajoin (required for mistral workflow)
+  NovajoinPolicies:
+    compute_service_user:
+      key: 'compute_service_user'
+      value: 'role:admin'
   HeatConvergenceEngine: true
   HeatCorsAllowedOrigin: '*'
   HeatMaxNestedStackDepth: 7
@@ -102,6 +108,7 @@ parameter_defaults:
   HeatMaxJsonBodySize: 4194304
   HeatReauthenticationAuthMethod: 'trusts'
   HeatYaqlLimitIterators: 10000
+  HeatYaqlMemoryQuota: 200000
   # Disable non-lifecycle stack actions like
   # snapshot, resume, cancel update and stack check.
   HeatApiPolicies:
@@ -146,8 +153,8 @@ parameter_defaults:
   NeutronServicePlugins: router,segments
   NeutronMechanismDrivers: ['openvswitch', 'baremetal']
   NeutronNetworkVLANRanges: 'physnet1:1000:2999'
-  NeutronPluginExtensions: 'port_security'
-  NeutronFirewallDriver: ''
+  NeutronPluginExtensions: port_security,dns_domain_ports
+  NeutronOVSFirewallDriver: ''
   NeutronNetworkType: ['local','flat','vlan','gre','vxlan']
   NeutronTunnelIdRanges: '20:100'
   NeutronTypeDrivers: ['local','flat','vlan','gre','vxlan']
@@ -194,35 +201,4 @@ parameter_defaults:
   MySQLServerOptions:
     mysqld:
       connect_timeout: 60
-  # TODO(emilien) Remove when Keepalived 2.0.6 is out
-  # https://bugs.launchpad.net/tripleo/+bug/1791238
-  KeepalivedRestart: true
   SshFirewallAllowAll: true
-  UndercloudExtraConfig:
-    aodh::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    barbican::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    ceilometer::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    cinder::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    congress::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    ec2api::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    glance::api::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    gnocchi::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    heat::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    heat::cache::memcache_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    horizon::cache_server_ip: "%{hiera('memcached::listen_ip_uri')}:11211"
-    ironic::api::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    ironic::inspector::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    keystone::cache_memcache_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    keystone::cache_backend: "dogpile.cache.memcached"
-    manila::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    mistral::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    neutron::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    nova::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    nova::cache::memcache_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    nova::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    sahara::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    swift::proxy::authtoken::memcache_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    swift::proxy::cache::memcache_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    tacker::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    zaqar::keystone::authtoken::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"
-    swift::objectexpirer::memcached_servers: "%{hiera('memcached::listen_ip_uri')}:11211"

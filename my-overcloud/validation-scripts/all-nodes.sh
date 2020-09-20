@@ -35,7 +35,7 @@ function ping_controller_ips() {
     if [[ $REMOTE_IP =~ ":" ]]; then
       networks=$(ip -6 r | grep -v default | cut -d " " -f 1 | grep -v "unreachable")
     else
-      networks=$(ip r | grep -v default | cut -d " " -f 1)
+      networks=$(ip r | grep -E '^([0-9]{1,3}\.?){4}' | cut -d " " -f 1)
     fi
     for LOCAL_NETWORK in $networks; do
       in_network=$($(get_python) -c "import ipaddress; net=ipaddress.ip_network(u'$LOCAL_NETWORK'); addr=ipaddress.ip_address(u'$REMOTE_IP'); print(addr in net)")
@@ -59,7 +59,7 @@ function ping_controller_ips() {
 # all of them should some manual network config have
 # multiple gateways.
 function ping_default_gateways() {
-  DEFAULT_GW=$(ip r | grep ^default | cut -d " " -f 3)
+  DEFAULT_GW=$(ip ro | awk '/^default/ {print $3}')
   set +e
   for GW in $DEFAULT_GW; do
     echo -n "Trying to ping default gateway ${GW}..."
@@ -88,43 +88,6 @@ function fqdn_check() {
   echo "SUCCESS"
 }
 
-# run chrony/ntpdate as available
-function _run_ntp_sync() {
-  local NTP_SERVER=$1
-  if ! type ntpdate 2>/dev/null; then
-    chronyd -Q "server $NTP_SERVER iburst"
-  else
-    ntpdate -qud $NTP_SERVER
-  fi
-}
-
-# Verify at least one time source is available.
-function ntp_check() {
-  NTP_SERVERS=$(hiera ntp::servers nil |tr -d '[],"')
-  if [[ "$NTP_SERVERS" != "nil" ]];then
-    echo -n "Testing NTP..."
-    NTP_SUCCESS=0
-    for NTP_SERVER in $NTP_SERVERS; do
-      set +e
-      NTPDATE_OUT=$(_run_ntp_sync $NTP_SERVER 2>&1)
-      NTPDATE_EXIT=$?
-      set -e
-      if [[ "$NTPDATE_EXIT" == "0" ]];then
-        NTP_SUCCESS=1
-        break
-      else
-        NTPDATE_OUT_FULL="$NTPDATE_OUT_FULL $NTPDATE_OUT"
-      fi
-    done
-    if  [[ "$NTP_SUCCESS" == "0" ]];then
-      echo "FAILURE"
-      echo "$NTPDATE_OUT_FULL"
-      exit 1
-    fi
-    echo "SUCCESS"
-  fi
-}
-
 if [[ "${validate_gateways_icmp,,}" == "true" ]];then
   ping_default_gateways
 fi
@@ -133,7 +96,4 @@ if [[ "${validate_controllers_icmp,,}" == "true" ]];then
 fi
 if [[ "${validate_fqdn,,}" == "true" ]];then
   fqdn_check
-fi
-if [[ "${validate_ntp,,}" == "true" ]];then
-  ntp_check
 fi

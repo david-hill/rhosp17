@@ -45,6 +45,12 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   DockerPuppetMountHostPuppet:
     type: boolean
     default: true
@@ -52,7 +58,7 @@ parameters:
   PythonInterpreter:
     type: string
     description: The python interpreter to use for python and ansible actions
-    default: /usr/bin/python
+    default: "$(command -v python3 || command -v python)"
   NeutronEnableL2Pop:
     type: string
     description: Enable/disable the L2 population feature in the Neutron agents.
@@ -123,6 +129,20 @@ parameters:
     description: |
       Set additional ethertypes to to be configured on neutron firewalls.
     type: comma_delimited_list
+  NeutronOvsResourceProviderBandwidths:
+    description: >
+      Comma-separated list of <bridge>:<egress_bw>:<ingress_bw> tuples, showing
+      the available bandwidth for the given bridge in the given direction. The
+      direction is meant from VM perspective. Bandwidth is measured in kilobits
+      per second (kbps). The bridge must appear in bridge_mappings as the value.
+    type: comma_delimited_list
+    default: ""
+    tags:
+     - role_specific
+  NeutronEnableIgmpSnooping:
+    description: Enable IGMP Snooping.
+    type: boolean
+    default: false
 
 conditions:
   no_firewall_driver: {equals : [{get_param: NeutronOVSFirewallDriver}, '']}
@@ -147,11 +167,13 @@ resources:
             - neutron::agents::ml2::ovs::bridge_mappings: NeutronBridgeMappings
               vswitch::ovs::enable_hw_offload: OvsHwOffload
               vswitch::ovs::disable_emc: OvsDisableEMC
+              neutron::agents::ml2::ovs::resource_provider_bandwidths: NeutronOvsResourceProviderBandwidths
             - values: {get_param: [RoleParameters]}
           - values:
               NeutronBridgeMappings: {get_param: NeutronBridgeMappings}
               OvsHwOffload: {get_param: OvsHwOffload}
               OvsDisableEMC: {get_param: OvsDisableEMC}
+              NeutronOvsResourceProviderBandwidths: {get_param: NeutronOvsResourceProviderBandwidths}
 
   NeutronBase:
     type: ./neutron-base.yaml
@@ -173,6 +195,12 @@ outputs:
     description: Role data for Neutron openvswitch service
     value:
       service_name: neutron_ovs_agent
+      firewall_rules:
+        '118 neutron vxlan networks':
+          proto: 'udp'
+          dport: 4789
+        '136 neutron gre networks':
+          proto: 'gre'
       monitoring_subscription: {get_param: MonitoringSubscriptionNeutronOvs}
       config_settings:
         map_merge:
@@ -184,6 +212,7 @@ outputs:
             neutron::agents::ml2::ovs::tunnel_types: {get_param: NeutronTunnelTypes}
             neutron::agents::ml2::ovs::extensions: {get_param: NeutronAgentExtensions}
             neutron::agents::ml2::ovs::tunnel_csum: {get_param: NeutronOVSTunnelCsum}
+            neutron::agents::ml2::ovs::igmp_snooping_enable: {get_param: NeutronEnableIgmpSnooping}
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -196,12 +225,6 @@ outputs:
                    "%{hiera('$NETWORK')}"
                  params:
                    $NETWORK: {get_param: [ServiceNetMap, NeutronTenantNetwork]}
-            tripleo::neutron_ovs_agent::firewall_rules:
-              '118 neutron vxlan networks':
-                proto: 'udp'
-                dport: 4789
-              '136 neutron gre networks':
-                proto: 'gre'
           -
             if:
             - neutron_dvr_unset
@@ -228,13 +251,13 @@ outputs:
               tripleo.collectd.plugins.neutron_ovs_agent:
                 - ovs_events
                 - ovs_stats
-              collectd::plugin::ovs_events::socket: '/var/run/openvswitch/db.sock'
-              collectd::plugin::ovs_stats::socket: '/var/run/openvswitch/db.sock'
+              collectd::plugin::ovs_events::socket: '/run/openvswitch/db.sock'
+              collectd::plugin::ovs_stats::socket: '/run/openvswitch/db.sock'
       puppet_config:
         config_volume: neutron
         puppet_tags: neutron_config,neutron_agent_ovs,neutron_plugin_ml2
         step_config: |
-          include ::tripleo::profile::base::neutron::ovs
+          include tripleo::profile::base::neutron::ovs
         config_image: {get_param: ContainerNeutronConfigImage}
         # We need to mount /run for puppet_config step. This is because
         # puppet-vswitch runs the commands "ovs-vsctl list open_vswitch ."
@@ -264,8 +287,20 @@ outputs:
               template: |
                 #!/bin/bash
                 set -xe
-                PYTHON -m neutron.cmd.destroy_patch_ports --config-file /usr/share/neutron/neutron-dist.conf --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini --config-dir /etc/neutron/conf.d/common --config-dir /etc/neutron/conf.d/neutron-openvswitch-agent
-                /usr/bin/neutron-openvswitch-agent --config-file /usr/share/neutron/neutron-dist.conf --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini --config-dir /etc/neutron/conf.d/common --log-file=/var/log/neutron/openvswitch-agent.log
+                PYTHON -m neutron.cmd.destroy_patch_ports \
+                --config-file /usr/share/neutron/neutron-dist.conf \
+                --config-file /etc/neutron/neutron.conf \
+                --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini \
+                --config-dir /etc/neutron/conf.d/common \
+                --config-dir /etc/neutron/conf.d/neutron-openvswitch-agent \
+                --log-file=/var/log/neutron/openvswitch-agent.log
+
+                /usr/bin/neutron-openvswitch-agent \
+                --config-file /usr/share/neutron/neutron-dist.conf \
+                --config-file /etc/neutron/neutron.conf \
+                --config-file /etc/neutron/plugins/ml2/openvswitch_agent.ini \
+                --config-dir /etc/neutron/conf.d/common \
+                --log-file=/var/log/neutron/openvswitch-agent.log
               params:
                 PYTHON: {get_param: PythonInterpreter}
       docker_config:
@@ -293,10 +328,9 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/neutron_ovs_agent.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/neutron/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
                   - /lib/modules:/lib/modules:ro
                   - /run/openvswitch:/run/openvswitch:shared,z
-                  - /var/run/openvswitch/:/var/run/openvswitch/:shared,z
                   -
                     if:
                       - docker_puppet_mount_host
@@ -304,6 +338,7 @@ outputs:
                       - ''
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           neutron_ovs_agent:
             start_order: 10
@@ -314,7 +349,7 @@ outputs:
             security_opt: 'label=disable'
             restart: always
             depends_on:
-              - openvswitch
+              - openvswitch.service
             healthcheck: {get_attr: [ContainersCommon, healthcheck_rpc_port]}
             ulimit: {get_param: DockerOpenvswitchUlimit}
             volumes:
@@ -323,7 +358,7 @@ outputs:
                 - {get_attr: [NeutronLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/neutron_ovs_agent.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/neutron/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
                   - /var/lib/container-config-scripts/neutron_ovs_agent_launcher.sh:/neutron_ovs_agent_launcher.sh:ro
                   - /lib/modules:/lib/modules:ro
                   - /run/openvswitch:/run/openvswitch:shared,z
@@ -338,7 +373,7 @@ outputs:
             - block:
               - name: load openvswitch module
                 import_role:
-                  name: tripleo-module-load
+                  name: tripleo_module_load
                 vars:
                   modules:
                     - name: openvswitch
@@ -362,10 +397,6 @@ outputs:
                   name: virt_sandbox_use_netlink
                   persistent: yes
                   state: yes
-              - name: Run iptables -t raw -L to workaround a rhel8.0 bug (remove once rhbz#1673609 is fixed)
-                shell: |
-                  iptables -t raw -nL
-                  ip6tables -t raw -nL
       update_tasks:
         # puppetlabs-firewall manages security rules via Puppet but make the rules
         # consistent by default. Since Neutron also creates some rules, we don't
@@ -382,21 +413,3 @@ outputs:
                       regexp=".*neutron-"
                       state=absent
           when: step|int == 5
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if neutron_ovs_agent is deployed
-              command: systemctl is-enabled --quiet neutron-openvswitch-agent
-              ignore_errors: True
-              register: neutron_ovs_agent_enabled_result
-            - name: Set fact neutron_ovs_agent_enabled
-              set_fact:
-                neutron_ovs_agent_enabled: "{{ neutron_ovs_agent_enabled_result.rc == 0 }}"
-        - name: Stop neutron_openvswitch_agent
-          service: name=neutron-openvswitch-agent state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - neutron_ovs_agent_enabled|bool

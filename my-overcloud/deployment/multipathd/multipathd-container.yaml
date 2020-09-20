@@ -123,7 +123,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/multipathd.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/multipathd/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/multipathd:/var/lib/kolla/config_files/src:ro
                   - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
                   - /dev/:/dev/
                   - /run/:/run/
@@ -136,7 +136,7 @@ outputs:
       host_prep_tasks:
         - name: Check if multipathd is deployed on the host
           command: systemctl is-enabled --quiet multipathd
-          ignore_errors: True
+          failed_when: false
           register: multipathd_enabled_result
         - name: Set fact multipathd_enabled
           set_fact:
@@ -146,7 +146,7 @@ outputs:
           when: multipathd_enabled|bool
         - name: load dm-multipath
           import_role:
-            name: tripleo-module-load
+            name: tripleo_module_load
           vars:
             modules:
               - name: dm-multipath
@@ -154,10 +154,10 @@ outputs:
           file:
             path: /etc/multipath
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: ensure /etc/multipath.conf exists
           file:
             path: /etc/multipath.conf
             state: touch
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
       upgrade_tasks: []

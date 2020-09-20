@@ -70,7 +70,7 @@ outputs:
             cert_content: {get_param: SSLCertificate}
             chain_content: {get_param: SSLIntermediateCertificate}
             key_content: {get_param: SSLKey}
-          no_log: true
+          no_log: "{{ hide_sensitive_logs | bool }}"
 
         # We want to ensure we run all this block IFF we have
         # a certificate content.
@@ -85,7 +85,9 @@ outputs:
                 path: "{{cert_path}}"
 
             - name: set is_haproxy_bootstrap_node fact
-              set_fact: is_haproxy_bootstrap_node={{haproxy_short_bootstrap_node_name == ansible_hostname}}
+              set_fact: is_haproxy_bootstrap_node={{haproxy_short_bootstrap_node_name | lower == ansible_hostname | lower}}
+              when:
+                - haproxy_short_bootstrap_node_name|default(false)
 
             - name: get haproxy status
               register: haproxy_state
@@ -133,7 +135,7 @@ outputs:
             # We hence need to do this file creation in two distinct steps
             # and ignore failure on the ownership change.
             - name: push certificate content
-              no_log: true
+              no_log: "{{ hide_sensitive_logs | bool }}"
               copy:
                 dest: "{{cert_path}}"
                 mode: 0440
@@ -173,42 +175,10 @@ outputs:
                 - container_id.stdout is defined
                 - container_id.stdout != ''
               block:
-                - name: set kolla_dir fact
-                  set_fact: kolla_dir="/var/lib/kolla/config_files/src-tls"
-
-                - name: assert {{ kolla_dir }}{{ cert_path }} exists
-                  stat:
-                    path: "{{ kolla_dir }}{{cert_path}}"
-                  register: kolla_cert_exists
-
-                - name: set certificate group on host via container
+                - name: copy certificate, chgrp, restart haproxy
                   shell: |
-                    if {{ container_cli }} ps | grep {{container_id.stdout}}; then
-                      {{ container_cli }} exec {{container_id.stdout}} chgrp haproxy {{kolla_dir}}{{cert_path}}
-                    # handle situation when container_cli is podman but
-                    # the containers are still under docker
-                    elif docker ps | grep {{container_id.stdout}}; then
-                      docker exec {{container_id.stdout}} chgrp haproxy {{kolla_dir}}{{cert_path}}
-                    else
-                      echo "Error: {{container_id.stdout}} container not found"
-                      exit 1
-                    fi
-                  when: kolla_cert_exists.stat.exists
-
-                - name: copy certificate from kolla directory to final location
-                  shell: |
-                    if {{ container_cli }} ps | grep {{container_id.stdout}}; then
-                      {{ container_cli }} exec {{container_id.stdout}} cp {{kolla_dir}}{{cert_path}} {{cert_path}}
-                    # handle situation when container_cli is podman but
-                    # the containers are still under docker
-                    elif docker ps | grep {{container_id.stdout}}; then
-                      docker exec {{container_id.stdout}} cp {{kolla_dir}}{{cert_path}} {{cert_path}}
-                    else
-                      echo "Error: {{container_id.stdout}} container not found"
-                      exit 1
-                    fi
-                  when: kolla_cert_exists.stat.exists
-
-                - name: send restart order to haproxy container
-                  command: "{{ container_cli }} kill --signal=HUP {{container_id.stdout}}"
-                  when: kolla_cert_exists.stat.exists
+                    set -e
+                    {{ container_cli }} cp {{ cert_path }} {{ item }}:{{ cert_path }}
+                    {{ container_cli }} exec --user root {{ item }} chgrp haproxy {{ cert_path }}
+                    {{ container_cli }} kill --signal=HUP {{ item }}
+                  with_items: "{{ container_id.stdout.split('\n') }}"

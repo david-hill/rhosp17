@@ -41,21 +41,31 @@ parameters:
     type: string
     constraints:
       - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   MistralPassword:
     description: The password for the Mistral service and db account, used by the Mistral services.
     type: string
     hidden: true
-  KeystoneRegion:
-    type: string
-    default: 'regionOne'
-    description: Keystone region for endpoint
   NotificationDriver:
     type: string
     default: 'messagingv2'
     description: Driver or drivers to handle sending notifications.
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
+  MistralRPCResponseTimeout:
+    type: number
+    default: 120
+    description: Mistral RPC timeout
 
 conditions:
   service_debug_unset: {equals : [{get_param: MistralDebug}, '']}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 outputs:
   role_data:
@@ -71,35 +81,38 @@ outputs:
             host: {get_param: [EndpointMap, MysqlInternal, host]}
             path: /mistral
             query:
-              read_default_file: /etc/my.cnf.d/tripleo.cnf
-              read_default_group: tripleo
+                if:
+                  - enable_sqlalchemy_collectd
+                  -
+                      read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+                      plugin: collectd
+                      collectd_program_name: mistral
+                      collectd_host: localhost
+                  -
+                      read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+
         mistral::notification_driver: {get_param: NotificationDriver}
         mistral::logging::debug:
           if:
           - service_debug_unset
           - {get_param: Debug }
           - {get_param: MistralDebug }
-        mistral::rpc_response_timeout: 120
+        mistral::rpc_response_timeout: {get_param: MistralRPCResponseTimeout}
         mistral::keystone::authtoken::project_name: 'service'
         mistral::keystone::authtoken::user_domain_name: 'Default'
         mistral::keystone::authtoken::project_domain_name: 'Default'
         mistral::keystone::authtoken::password: {get_param: MistralPassword}
         mistral::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneV3Internal, uri]}
-        mistral::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneV3Internal, uri]}
         mistral::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+        mistral::keystone::authtoken::region_name: {get_param: KeystoneRegion}
         mistral::keystone_ec2_uri:
           list_join:
           - ''
           - - {get_param: [EndpointMap, KeystoneV3Internal, uri]}
             - '/ec2tokens'
       service_config_settings:
-        keystone:
-          mistral::keystone::auth::tenant: 'service'
-          mistral::keystone::auth::public_url: {get_param: [EndpointMap, MistralPublic, uri]}
-          mistral::keystone::auth::internal_url: {get_param: [EndpointMap, MistralInternal, uri]}
-          mistral::keystone::auth::admin_url: {get_param: [EndpointMap, MistralAdmin, uri]}
-          mistral::keystone::auth::password: {get_param: MistralPassword}
-          mistral::keystone::auth::region: {get_param: KeystoneRegion}
         mysql:
           mistral::db::mysql::user: mistral
           mistral::db::mysql::host: {get_param: [EndpointMap, MysqlInternal, host_nobrackets]}

@@ -55,7 +55,6 @@
     - OS::TripleO::Services::DesignateWorker
     - OS::TripleO::Services::DesignateMDNS
     - OS::TripleO::Services::DesignateSink
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::Etcd
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
@@ -74,7 +73,6 @@
     - OS::TripleO::Services::IronicInspector
     - OS::TripleO::Services::IronicPxe
     - OS::TripleO::Services::Iscsid
-    - OS::TripleO::Services::Keepalived
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::Keystone
     - OS::TripleO::Services::LoginDefs

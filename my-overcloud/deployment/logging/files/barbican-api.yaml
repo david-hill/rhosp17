@@ -38,14 +38,7 @@ outputs:
           path: "{{ item.path }}"
           state: directory
           setype: "{{ item.setype }}"
+          mode: "{{ item.mode }}"
         with_items:
-          - { 'path': /var/log/containers/barbican, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/containers/httpd/barbican-api, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/barbican, 'setype': var_log_t }
-      - name: barbican logs readme
-        copy:
-          dest: /var/log/barbican/readme.txt
-          content: |
-            Log files from barbican containers can be found under
-            /var/log/containers/barbican.
-        ignore_errors: true
+          - { 'path': /var/log/containers/barbican, 'setype': container_file_t, 'mode': '0750' }
+          - { 'path': /var/log/containers/httpd/barbican-api, 'setype': container_file_t, 'mode': '0750' }

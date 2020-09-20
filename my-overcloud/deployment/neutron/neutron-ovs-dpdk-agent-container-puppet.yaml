@@ -116,14 +116,19 @@ outputs:
       service_name: neutron_ovs_dpdk_agent
       config_settings:
         map_merge:
-          - map_replace:
-            - get_attr: [NeutronOvsAgent, role_data, config_settings]
-            - keys:
-                tripleo::neutron_ovs_agent::firewall_rules: tripleo::neutron_ovs_dpdk_agent::firewall_rules
+          - get_attr: [NeutronOvsAgent, role_data, config_settings]
           - nova::compute::libvirt::qemu::group: {get_attr: [RoleParametersValue, value, vhostuser_socket_group]}
           - get_attr: [RoleParametersValue, value]
       service_config_settings:
-        get_attr: [NeutronOvsAgent, role_data, service_config_settings]
+        map_merge:
+          - get_attr: [NeutronOvsAgent, role_data, service_config_settings]
+          - collectd:
+              tripleo.collectd.plugins.neutron_ovs_dpdk_agent:
+                - dpdk_telemetry
+                - ovs_events
+                - ovs_stats
+              collectd::plugin::ovs_events::socket: '/run/openvswitch/db.sock'
+              collectd::plugin::ovs_stats::socket: '/run/openvswitch/db.sock'
       puppet_config:
         config_volume: neutron
         puppet_tags: neutron_config,neutron_agent_ovs,neutron_plugin_ml2
@@ -157,5 +162,3 @@ outputs:
         get_attr: [NeutronOvsAgent, role_data, upgrade_tasks]
       update_tasks:
         get_attr: [NeutronOvsAgent, role_data, update_tasks]
-      fast_forward_upgrade_tasks:
-        get_attr: [NeutronOvsAgent, role_data, fast_forward_upgrade_tasks]

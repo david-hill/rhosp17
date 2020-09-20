@@ -52,6 +52,10 @@ parameters:
     default: false
     description: Whether to enable gnocchi usage.
     type: boolean
+  CeilometerPassword:
+    description: The password for the ceilometer service account.
+    type: string
+    hidden: true
 
 conditions:
     ceilometer_enable_gnocchi: {equals: [{get_param: CeilometerEnableGnocchi}, True]}
@@ -77,6 +81,13 @@ outputs:
     value:
       service_name: ceilometer_agent_central
       monitoring_subscription: {get_param: MonitoringSubscriptionCeilometerCentral}
+      keystone_resources:
+        ceilometer:
+          users:
+            ceilometer:
+              password: {get_param: CeilometerPassword}
+              roles:
+                - admin
       config_settings:
         map_merge:
           - get_attr: [CeilometerServiceBase, role_data, config_settings]
@@ -93,7 +104,7 @@ outputs:
         config_volume: ceilometer
         puppet_tags: ceilometer_config
         step_config: |
-          include ::tripleo::profile::base::ceilometer::agent::polling
+          include tripleo::profile::base::ceilometer::agent::polling
         config_image: {get_param: ContainerCeilometerConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/ceilometer_agent_central.json:
@@ -126,7 +137,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ceilometer_agent_central.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ceilometer/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ceilometer:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/ceilometer:/var/log/ceilometer:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -141,8 +152,6 @@ outputs:
                   detach: false
                   privileged: false
                   user: root
-                  healthcheck:
-                    test: /openstack/healthcheck
                   volumes:
                     list_concat:
                       - {get_attr: [ContainersCommon, volumes]}
@@ -160,16 +169,9 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/ceilometer, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/ceilometer, 'setype': svirt_sandbox_file_t }
-        - name: ceilometer logs readme
-          copy:
-            dest: /var/log/ceilometer/readme.txt
-            content: |
-              Log files from ceilometer containers can be found under
-              /var/log/containers/ceilometer.
-          ignore_errors: true
+            - { 'path': /var/log/containers/ceilometer, 'setype': container_file_t, 'mode': '0750' }
       external_upgrade_tasks:
         - when:
             - step|int == 1
@@ -180,26 +182,8 @@ outputs:
           block:
             - name: Stop ceilometer agent central container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - ceilometer_agent_central
                 tripleo_delegate_to: "{{ groups['ceilometer_agent_central'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-ceilometer-central is deployed
-              command: systemctl is-enabled --quiet openstack-ceilometer-central
-              ignore_errors: True
-              register: ceilometer_agent_central_enabled_result
-            - name: Set fact ceilometer_agent_central_enabled
-              set_fact:
-                ceilometer_agent_central_enabled: "{{ ceilometer_agent_central_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-ceilometer-central service
-          service: name=openstack-ceilometer-central state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - ceilometer_agent_central_enabled|bool

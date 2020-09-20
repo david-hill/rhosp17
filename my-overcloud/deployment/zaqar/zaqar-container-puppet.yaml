@@ -36,6 +36,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   Debug:
     type: boolean
     description: Set to True to enable debugging on all services.
@@ -46,6 +52,11 @@ parameters:
     type: string
     constraints:
       - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   ZaqarPassword:
     description: The password for Zaqar
     type: string
@@ -87,6 +98,7 @@ conditions:
   zaqar_workers_zero: {equals : [{get_param: ZaqarWorkers}, 0]}
   zaqar_messaging_store_swift: {equals : [{get_param: ZaqarMessageStore}, 'swift']}
   zaqar_messaging_store_redis: {equals : [{get_param: ZaqarMessageStore}, 'redis']}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
 
@@ -110,6 +122,34 @@ outputs:
     description: Role data for the Zaqar API role.
     value:
       service_name: zaqar_api
+      firewall_rules:
+        '113 zaqar_api':
+          dport:
+            - 9000
+            - 8888
+            - 3000 #SSL for websocket
+            - 13888 #SSL for api
+      keystone_resources:
+        zaqar:
+          endpoints:
+            public: {get_param: [EndpointMap, ZaqarPublic, uri]}
+            internal: {get_param: [EndpointMap, ZaqarInternal, uri]}
+            admin: {get_param: [EndpointMap, ZaqarAdmin, uri]}
+          users:
+            zaqar:
+              password: {get_param: ZaqarPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'messaging'
+        zaqar-websocket:
+          endpoints:
+            public: {get_param: [EndpointMap, ZaqarWebSocketPublic, uri]}
+            internal: {get_param: [EndpointMap, ZaqarWebSocketInternal, uri]}
+            admin: {get_param: [EndpointMap, ZaqarWebSocketAdmin, uri]}
+          users:
+            zaqar-websocket:
+              password: {get_param: ZaqarPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'messaging-websocket'
       config_settings:
         map_merge:
           - get_attr: [ApacheServiceBase, role_data, config_settings]
@@ -118,7 +158,7 @@ outputs:
             zaqar::keystone::authtoken::project_name: 'service'
             zaqar::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             zaqar::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri]}
-            zaqar::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri]}
+            zaqar::keystone::authtoken::region_name: {get_param: KeystoneRegion}
             zaqar::keystone::trust::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             zaqar::logging::debug:
               if:
@@ -146,7 +186,7 @@ outputs:
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, ZaqarApiNetwork]}
             zaqar::message_pipeline: 'zaqar.notification.notifier'
-            zaqar::max_messages_post_size: 1048576
+            zaqar::max_messages_post_size: 2097152
             zaqar::unreliable: true
             zaqar::wsgi::apache::servername:
               str_replace:
@@ -187,8 +227,18 @@ outputs:
                   host: {get_param: [EndpointMap, MysqlInternal, host]}
                   path: /zaqar
                   query:
-                    read_default_file: /etc/my.cnf.d/tripleo.cnf
-                    read_default_group: tripleo
+                    if:
+                      - enable_sqlalchemy_collectd
+                      -
+                          read_default_file: /etc/my.cnf.d/tripleo.cnf
+                          read_default_group: tripleo
+                          plugin: collectd
+                          collectd_program_name: zaqar
+                          collectd_host: localhost
+                      -
+                          read_default_file: /etc/my.cnf.d/tripleo.cnf
+                          read_default_group: tripleo
+
             - {}
           -
             if:
@@ -198,27 +248,8 @@ outputs:
       service_config_settings:
         map_merge:
           - keystone:
-              zaqar::keystone::auth::password: {get_param: ZaqarPassword}
-              zaqar::keystone::auth::public_url: {get_param: [EndpointMap, ZaqarPublic, uri]}
-              zaqar::keystone::auth::admin_url: {get_param: [EndpointMap, ZaqarAdmin, uri]}
-              zaqar::keystone::auth::internal_url: {get_param: [EndpointMap, ZaqarInternal, uri]}
-              zaqar::keystone::auth::region: {get_param: KeystoneRegion}
-              zaqar::keystone::auth::tenant: 'service'
-              zaqar::keystone::auth_websocket::password: {get_param: ZaqarPassword}
-              zaqar::keystone::auth_websocket::public_url: {get_param: [EndpointMap, ZaqarWebSocketPublic, uri]}
-              zaqar::keystone::auth_websocket::admin_url: {get_param: [EndpointMap, ZaqarWebSocketAdmin, uri]}
-              zaqar::keystone::auth_websocket::internal_url: {get_param: [EndpointMap, ZaqarWebSocketInternal, uri]}
-              zaqar::keystone::auth_websocket::region: {get_param: KeystoneRegion}
-              zaqar::keystone::auth_websocket::tenant: 'service'
               zaqar::keystone::trust::password: {get_param: ZaqarPassword}
               zaqar::keystone::trust::user_domain_name: 'Default'
-              tripleo::zaqar_api::firewall_rules:
-                '113 zaqar_api':
-                  dport:
-                    - 9000
-                    - 8888
-                    - 3000 #SSL for websocket
-                    - 13888 #SSL for api
           -
             if:
             - zaqar_management_store_sqlalchemy
@@ -238,7 +269,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::zaqar
+            - - include tripleo::profile::base::zaqar
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerZaqarConfigImage}
       kolla_config:
@@ -247,6 +278,13 @@ outputs:
           config_files:
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
+              merge: false
+              preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -294,6 +332,8 @@ outputs:
                         - /var/log/containers/zaqar:/var/log/zaqar
                         - /var/log/containers/httpd/zaqar:/var/log/httpd
                   command: "/usr/bin/bootstrap_host_exec zaqar_api su zaqar -s /bin/bash -c 'zaqar-sql-db-manage upgrade head'"
+                  environment:
+                    TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
             - {}
           - step_4:
               zaqar:
@@ -311,19 +351,17 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/zaqar.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/zaqar/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/zaqar:/var/lib/kolla/config_files/src:ro
                       - /var/log/containers/zaqar:/var/log/zaqar
                       - /var/log/containers/httpd/zaqar:/var/log/httpd
-                      -
-                        if:
-                          - internal_tls_enabled
-                          - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                          - ''
-                      -
-                        if:
-                          - internal_tls_enabled
-                          - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                          - ''
+                    - if:
+                        - internal_tls_enabled
+                        - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                        - []
+                    - if:
+                        - internal_tls_enabled
+                        - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                        - []
                 environment:
                   KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
               zaqar_websocket:
@@ -342,7 +380,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/zaqar_websocket.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/zaqar/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/zaqar:/var/lib/kolla/config_files/src:ro
                       - /var/log/containers/zaqar:/var/log/zaqar
                       - /var/log/containers/httpd/zaqar:/var/log/httpd
                 environment:
@@ -353,16 +391,9 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/zaqar, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/zaqar, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/zaqar, 'setype': svirt_sandbox_file_t }
-        - name: zaqar logs readme
-          copy:
-            dest: /var/log/zaqar/readme.txt
-            content: |
-              Log files from zaqar containers can be found under
-              /var/log/containers/zaqar and /var/log/containers/httpd/zaqar.
-          ignore_errors: true
+            - { 'path': /var/log/containers/zaqar, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/containers/httpd/zaqar, 'setype': container_file_t, 'mode': '0750' }
       metadata_settings:
         get_attr: [ApacheServiceBase, role_data, metadata_settings]

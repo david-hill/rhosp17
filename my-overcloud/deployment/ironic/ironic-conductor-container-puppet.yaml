@@ -40,6 +40,10 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
   IronicConfigureSwiftTempUrlKey:
     default: true
     description: Whether to configure Swift temporary URLs for use with
@@ -223,6 +227,8 @@ parameters:
     description: The name of an Ironic Conductor Group.
     default: ''
     type: string
+    tags:
+      - role_specific
     constraints:
       - allowed_pattern: '^[a-zA-Z0-9_\-\.]*$'
   MonitoringSubscriptionIronicConductor:
@@ -236,6 +242,16 @@ parameters:
     default: 4
     description: The IP version that will be used for PXE booting.
     type: string
+  IronicDhcpv6StatefulAddressCount:
+    default: 4
+    description: Number of IPv6 addresses to allocate for ports created for
+                 provisioning, cleaning, rescue or inspection on DHCPv6-stateful
+                 networks. Different stages of the chain-loading process will
+                 request addresses with different CLID/IAID. Due to non-
+                 identical identifiers multiple addresses must be reserved for
+                 the host to ensure each step of the boot process can
+                 successfully lease addresses.
+    type: string
 
 conditions:
   default_deploy_interface_unset: {equals : [{get_param: IronicDefaultDeployInterface}, '']}
@@ -248,9 +264,26 @@ conditions:
       - equals: [{get_param: Debug}, true]
   enable_architecture_ppc64le: {contains: ['ppc64le', {get_param: AdditionalArchitectures}]}
   configure_swift_temp_url: {equals: [{get_param: IronicConfigureSwiftTempUrlKey}, true]}
-  ironic_conductor_group: {not: {equals: [{get_param: IronicConductorGroup}, '']}}
+  ironic_conductor_group:
+    or:
+      - not: {equals: [{get_param: IronicConductorGroup}, '']}
+      - not: {equals: [{get_param: [RoleParameters, IronicConductorGroup]}, '']}
 
 resources:
+  RoleParametersValue:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        map_replace:
+          - map_replace:
+            - if:
+                - ironic_conductor_group
+                - ironic::conductor::conductor_group: IronicConductorGroup
+                - {}
+            - values: {get_param: [RoleParameters]}
+          - values:
+              IronicConductorGroup: {get_param: IronicConductorGroup}
 
   ContainersCommon:
     type: ../containers-common.yaml
@@ -275,10 +308,17 @@ outputs:
     description: Role data for the Ironic Conductor role.
     value:
       service_name: ironic_conductor
+      firewall_rules:
+        '134 ironic conductor TFTP':
+          dport: 69
+          proto: udp
+        '135 ironic conductor HTTP':
+          dport: {get_param: IronicIPXEPort}
       monitoring_subscription: {get_param: MonitoringSubscriptionIronicConductor}
       config_settings:
         map_merge:
           - get_attr: [IronicBase, role_data, config_settings]
+          - get_attr: [RoleParametersValue, value]
           -
             if:
             - default_deploy_interface_unset
@@ -367,12 +407,6 @@ outputs:
             ironic::drivers::interfaces::enabled_vendor_interfaces: {get_param: IronicEnabledVendorInterfaces}
             ironic::drivers::interfaces::default_network_interface: {get_param: IronicDefaultNetworkInterface}
             ironic::drivers::interfaces::default_rescue_interface: {get_param: IronicDefaultRescueInterface}
-            tripleo::ironic_conductor::firewall_rules:
-              '134 ironic conductor TFTP':
-                dport: 69
-                proto: udp
-              '135 ironic conductor HTTP':
-                dport: {get_param: IronicIPXEPort}
             # NOTE(dtantsur): the my_ip parameter is heavily overloaded in
             # ironic. It's used as a default value for e.g. TFTP server IP,
             # glance and neutron endpoints, virtual console IP. We override
@@ -392,30 +426,36 @@ outputs:
             ironic::cinder::project_name: 'service'
             ironic::cinder::user_domain_name: 'Default'
             ironic::cinder::project_domain_name: 'Default'
+            ironic::cinder::region_name: {get_param: KeystoneRegion}
             ironic::glance::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::glance::username: 'ironic'
             ironic::glance::password: {get_param: IronicPassword}
             ironic::glance::project_name: 'service'
             ironic::glance::user_domain_name: 'Default'
             ironic::glance::project_domain_name: 'Default'
+            ironic::glance::region_name: {get_param: KeystoneRegion}
             ironic::neutron::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::neutron::username: 'ironic'
             ironic::neutron::password: {get_param: IronicPassword}
             ironic::neutron::project_name: 'service'
             ironic::neutron::user_domain_name: 'Default'
             ironic::neutron::project_domain_name: 'Default'
+            ironic::neutron::region_name: {get_param: KeystoneRegion}
+            ironic::neutron::dhcpv6_stateful_address_count: {get_param: IronicDhcpv6StatefulAddressCount}
             ironic::service_catalog::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::service_catalog::username: 'ironic'
             ironic::service_catalog::password: {get_param: IronicPassword}
             ironic::service_catalog::project_name: 'service'
             ironic::service_catalog::user_domain_name: 'Default'
             ironic::service_catalog::project_domain_name: 'Default'
+            ironic::service_catalog::region_name: {get_param: KeystoneRegion}
             ironic::swift::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::swift::username: 'ironic'
             ironic::swift::password: {get_param: IronicPassword}
             ironic::swift::project_name: 'service'
             ironic::swift::user_domain_name: 'Default'
             ironic::swift::project_domain_name: 'Default'
+            ironic::swift::region_name: {get_param: KeystoneRegion}
             # ironic-inspector support is not implemented, but let's configure
             # the credentials for consistency.
             ironic::drivers::inspector::enabled: false
@@ -425,6 +465,7 @@ outputs:
             ironic::drivers::inspector::project_name: 'service'
             ironic::drivers::inspector::user_domain_name: 'Default'
             ironic::drivers::inspector::project_domain_name: 'Default'
+            ironic::drivers::inspector::region_name: {get_param: KeystoneRegion}
             tripleo::profile::base::ironic::conductor::enable_staging:  {get_param: IronicEnableStagingDrivers}
           # to avoid hard linking errors we store these on the same
           # volume/device as the ironic master_path
@@ -434,11 +475,6 @@ outputs:
           - ironic::pxe::tftp_root: /var/lib/ironic/tftpboot
           - ironic::pxe::http_root: /var/lib/ironic/httpboot
           - ironic::conductor::http_root: /var/lib/ironic/httpboot
-          -
-            if:
-            - ironic_conductor_group
-            - ironic::conductor::conductor_group: {get_param: IronicConductorGroup}
-            - {}
       service_config_settings: {}
       # BEGIN DOCKER SETTINGS
       puppet_config:
@@ -447,7 +483,7 @@ outputs:
         step_config:
          list_join:
             - "\n"
-            - - include ::tripleo::profile::base::ironic::conductor
+            - - include tripleo::profile::base::ironic::conductor
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerIronicConfigImage}
         volumes:
@@ -478,6 +514,7 @@ outputs:
             export OS_USERNAME=$(crudini --get /etc/ironic/ironic.conf swift username)
             export OS_PASSWORD=$(crudini --get /etc/ironic/ironic.conf swift password)
             export OS_AUTH_URL=$(crudini --get /etc/ironic/ironic.conf swift auth_url)
+            export OS_INTERFACE=internal
             export OS_AUTH_TYPE=password
             export OS_IDENTITY_API_VERSION=3
 
@@ -532,7 +569,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/ironic_conductor.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/ironic/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/ironic:/var/lib/kolla/config_files/src:ro
                       - /lib/modules:/lib/modules:ro
                       - /sys:/sys
                       - /dev:/dev
@@ -544,7 +581,7 @@ outputs:
       host_prep_tasks:
         - name: load iscsi_tcp module
           import_role:
-            name: tripleo-module-load
+            name: tripleo_module_load
           vars:
             modules:
               - name: iscsi_tcp
@@ -553,17 +590,10 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ironic, 'setype': svirt_sandbox_file_t }
-        - name: ironic logs readme
-          copy:
-            dest: /var/log/ironic/readme.txt
-            content: |
-              Log files from ironic containers can be found under
-              /var/log/containers/ironic and /var/log/containers/httpd/ironic-*.
-          ignore_errors: true
+            - { 'path': /var/log/containers/ironic, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/ironic, 'setype': container_file_t }
         - name: stat /httpboot
           stat: path=/httpboot
           register: stat_httpboot
@@ -592,28 +622,17 @@ outputs:
           with_items:
             - httpboot
             - tftpboot
-      fast_forward_upgrade_tasks:
-        - when:
+        # TODO(emilien): remove the cleanup tasks after Ussuri
+        # https://bugs.launchpad.net/tripleo/+bug/1868934
+        - name: Cleanup unnecessary container config-data
+          block: &ironic_config_data_cleanup
+            - name: Remove /var/lib/config-data/puppet-generated/ironic/var
+              file:
+                path: /var/lib/config-data/puppet-generated/ironic/var
+                state: absent
+      upgrade_tasks:
+        - name: Cleanup unnecessary container config-data
+          when:
             - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if ironic_conductor is deployed
-              command: systemctl is-enabled --quiet openstack-ironic-conductor
-              ignore_errors: True
-              register: ironic_conductor_enabled_result
-            - name: Set fact ironic_conductor_enabled
-              set_fact:
-                ironic_conductor_enabled: "{{ ironic_conductor_enabled_result.rc == 0 }}"
-        - name: Stop openstack-ironic-conductor
-          service: name=openstack-ironic-conductor state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - ironic_conductor_enabled|bool
-        - name: Ironic packages update
-          package:
-            name: 'openstack-ironic*'
-            state: latest
-          when:
-            - step|int == 6
-            - is_bootstrap_node|bool
+          tags: common
+          block: *ironic_config_data_cleanup

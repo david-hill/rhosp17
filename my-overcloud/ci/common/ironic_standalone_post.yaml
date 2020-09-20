@@ -10,12 +10,6 @@ parameters:
     type: json
 
 resources:
-  StandaloneStandardExtraConfigPost:
-    type: ../../extraconfig/post_deploy/standalone_post.yaml
-    properties:
-       servers:  {get_param: servers}
-       EndpointMap:  {get_param: EndpointMap}
-
   IronicVBMCSetup:
     type: vbmc_setup.yaml
     properties:

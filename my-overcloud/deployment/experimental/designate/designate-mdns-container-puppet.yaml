@@ -28,6 +28,11 @@ parameters:
   DefaultPasswords:
     default: {}
     type: json
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -50,6 +55,7 @@ parameters:
 
 conditions:
   designate_workers_zero: {equals : [{get_param: DesignateWorkers}, 0]}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
 
@@ -74,6 +80,15 @@ outputs:
     description: Role data for the Designate MDNS role.
     value:
       service_name: designate_mdns
+      firewall_rules:
+        '142 designate_mdns udp':
+          proto: 'udp'
+          dport:
+            - 5354
+        '143 designate_mdns tcp':
+          proto: 'tcp'
+          dport:
+            - 5354
       monitoring_subscription: {get_param: MonitoringSubscriptionDesignateMiniDNS}
       config_settings:
         map_merge:
@@ -86,17 +101,17 @@ outputs:
                 host: {get_param: [EndpointMap, MysqlInternal, host]}
                 path: /designate
                 query:
-                  read_default_file: /etc/my.cnf.d/tripleo.cnf
-                  read_default_group: tripleo
-            tripleo::designate_mdns::firewall_rules:
-              '142 designate_mdns udp':
-                proto: 'udp'
-                dport:
-                  - 5354
-              '143 designate_mdns tcp':
-                proto: 'tcp'
-                dport:
-                  - 5354
+                  if:
+                    - enable_sqlalchemy_collectd
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+                        plugin: collectd
+                        collectd_program_name: designate_mdns
+                        collectd_host: localhost
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
           -
             if:
             - designate_workers_zero
@@ -149,7 +164,7 @@ outputs:
                 -
                   - /run:/run
                   - /var/lib/kolla/config_files/designate_mdns.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/designate/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/designate:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/designate:/var/log/designate:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -159,13 +174,7 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/designate, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/designate, 'setype': svirt_sandbox_file_t }
-        - name: designate logs readme
-          copy:
-            dest: /var/log/designate/readme.txt
-            content: |
-              Log files from designate containers can be found under
-              /var/log/containers/designate.
-          ignore_errors: true
+            - { 'path': /var/log/designate, 'setype': container_file_t }
+            - { 'path': /var/log/containers/designate, 'setype': container_file_t, 'mode': '0750' }

@@ -70,7 +70,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::mistral
+            - - include tripleo::profile::base::mistral
               - get_attr: [MySQLClient, role_data, step_config]
         config_image: {get_param: ContainerMistralConfigImage}
       kolla_config:
@@ -97,9 +97,8 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
-                  - /run:/run
                   - /var/lib/kolla/config_files/mistral_event_engine.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/mistral/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/mistral:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/mistral:/var/log/mistral:z
                   - /var/lib/mistral:/var/lib/mistral:ro
                   - /usr/share/ansible/:/usr/share/ansible/:ro
@@ -112,16 +111,9 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/mistral, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/mistral, 'setype': svirt_sandbox_file_t }
-        - name: mistral logs readme
-          copy:
-            dest: /var/log/mistral/readme.txt
-            content: |
-              Log files from mistral containers can be found under
-              /var/log/containers/mistral.
-          ignore_errors: true
+            - { 'path': /var/log/containers/mistral, 'setype': container_file_t, 'mode': '0750' }
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink

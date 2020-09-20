@@ -22,6 +22,10 @@ if [ -n "$PUPPET_TAGS" ]; then
     TAGS="--tags \"$PUPPET_TAGS\""
 fi
 
+if [ ! -z ${STEP_CONFIG+x} ]; then
+    echo -e "${STEP_CONFIG}" | tee /etc/config.pp
+fi
+
 CHECK_MODE=""
 if [ -d "/tmp/puppet-check-mode" ]; then
     mkdir -p /etc/puppet/check-mode
@@ -68,7 +72,7 @@ verbosity=""
 
 # Disables archiving
 if [ -z "$NO_ARCHIVE" ]; then
-    archivedirs=("/etc" "/root" "/opt" "/var/lib/ironic/tftpboot" "/var/lib/ironic/httpboot" "/var/www" "/var/spool/cron" "/var/lib/nova/.ssh")
+    archivedirs=("/etc" "/root" "/opt" "/var/www" "/var/spool/cron" "/var/lib/nova/.ssh")
     rsync_srcs=""
     for d in "${archivedirs[@]}"; do
         if [ -d "$d" ]; then
@@ -77,11 +81,11 @@ if [ -z "$NO_ARCHIVE" ]; then
     done
     # On stack update, if a password was changed in a config file,
     # some services (e.g. mysql) must change their internal state
-    # (e.g. password in mysql DB) when paunch restarts them; and
-    # they need the old password to achieve that.
+    # (e.g. password in mysql DB) when tripleo_container_manage restarts them;
+    # and they need the old password to achieve that.
     # For those services, we update the config hash to notify
-    # paunch that a restart is needed, but we do not update the
-    # password file in container-puppet if the file already existed
+    # tripleo_container_manage that a restart is needed, but we do not update
+    # the password file in container-puppet if the file already existed
     # before and let the service regenerate it instead.
     password_files="/root/.my.cnf"
 
@@ -94,7 +98,10 @@ if [ -z "$NO_ARCHIVE" ]; then
 
     # Exclude read-only mounted directories/files which we do not want
     # to copy or delete.
-    ro_files="/etc/puppetlabs/ /opt/puppetlabs/"
+    ro_files="/etc/puppet/ /etc/puppetlabs/ /opt/puppetlabs/ /etc/pki/ca-trust/extracted "
+    ro_files+="/etc/pki/ca-trust/source/anchors /etc/pki/tls/certs/ca-bundle.crt "
+    ro_files+="/etc/pki/tls/certs/ca-bundle.trust.crt /etc/pki/tls/cert.pem "
+    ro_files+="/etc/hosts /etc/localtime /etc/hostname"
     for ro in $ro_files; do
         if [ -e "$ro" ]; then
             exclude_files+=" --exclude=$ro"
@@ -111,7 +118,6 @@ if [ -z "$NO_ARCHIVE" ]; then
     echo "Rsyncing config files from ${rsync_srcs} into ${conf_data_path}"
     rsync -a $verbosity -R --delay-updates --delete-after $exclude_files $rsync_srcs ${conf_data_path}
 
-
     # Also make a copy of files modified during puppet run
     echo "Gathering files modified after $(stat -c '%y' $origin_of_time)"
 
@@ -121,7 +127,7 @@ if [ -z "$NO_ARCHIVE" ]; then
     echo "Ensuring the removed config files are also purged in ${puppet_generated_path}:"
     cat $TMPFILE | sort
     cat $TMPFILE | xargs -n1 -r -I{} \
-        bash -c "rm -f ${puppet_generated_path}/{}"
+        bash -c "rm -rf ${puppet_generated_path}/{}"
     exec 5>&1
     exec 1>$TMPFILE2
     find $rsync_srcs -newer $origin_of_time -not -path '/etc/puppet*' -print0
@@ -131,6 +137,16 @@ if [ -z "$NO_ARCHIVE" ]; then
     echo "Rsyncing the modified files into ${puppet_generated_path}"
     rsync -a $verbosity -R -0 --delay-updates --delete-after $exclude_files \
         --files-from=$TMPFILE2 / ${puppet_generated_path}
+
+    # Cleanup any special files that might have been copied into place
+    # previously because fixes for LP#1860607 did not cleanup and required
+    # manual intervention if a container hit this. We can safely remove these
+    # files because they should be bind mounted into containers
+    for ro in $ro_files; do
+        if [ -e "${puppet_generated_path}/${ro}" ]; then
+            rm -rf "${puppet_generated_path}/${ro}"
+        fi
+    done
 
     # Write a checksum of the config-data dir, this is used as a
     # salt to trigger container restart when the config changes

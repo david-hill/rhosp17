@@ -36,6 +36,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   MistralWorkers:
     default: 1
     description: The number of workers for the mistral-api.
@@ -60,6 +66,14 @@ parameters:
     default: ''
     description: Indicate whether this resource may be shared with the domain received in the request
                  "origin" header.
+  MistralPassword:
+    description: The password for the Mistral service and db account, used by the Mistral services.
+    type: string
+    hidden: true
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
 
 conditions:
   mistral_workers_zero: {equals : [{get_param: MistralWorkers}, 0]}
@@ -88,6 +102,22 @@ outputs:
     description: Role data for the Mistral API role.
     value:
       service_name: mistral_api
+      firewall_rules:
+        '133 mistral':
+          dport:
+            - 8989
+            - 13989
+      keystone_resources:
+        mistral:
+          endpoints:
+            public: {get_param: [EndpointMap, MistralPublic, uri]}
+            internal: {get_param: [EndpointMap, MistralInternal, uri]}
+            admin: {get_param: [EndpointMap, MistralAdmin, uri]}
+          users:
+            mistral:
+              password: {get_param: MistralPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'workflowv2'
       config_settings:
         map_merge:
           - get_attr: [MistralBase, role_data, config_settings]
@@ -109,11 +139,6 @@ outputs:
             mistral::policy::policies: {get_param: MistralApiPolicies}
             mistral::cron_trigger::execution_interval: {get_param: MistralExecutionInterval}
             mistral::api::allow_action_execution_deletion: true
-            tripleo::mistral_api::firewall_rules:
-              '133 mistral':
-                dport:
-                  - 8989
-                  - 13989
             mistral::api::service_name: 'httpd'
             mistral::wsgi::apache::bind_host:
               str_replace:
@@ -139,7 +164,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::mistral::api
+            - - include tripleo::profile::base::mistral::api
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerMistralConfigImage}
       kolla_config:
@@ -179,7 +204,9 @@ outputs:
                 -
                   - /var/lib/config-data/mistral/etc/mistral/:/etc/mistral/:ro
                   - /var/log/containers/mistral:/var/log/mistral:z
-            command: "/usr/bin/bootstrap_host_exec mistral_api su mistral -s /bin/bash -c 'mistral-db-manage --config-file /etc/mistral/mistral.conf upgrade head'"
+            command: "/usr/bin/bootstrap_host_exec mistral_api su mistral -s /bin/bash -c 'mistral-db-manage --config-file /etc/mistral/mistral.conf --openstack_actions_mapping_path=/etc/mistral/mapping.json upgrade head'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           mistral_api:
             start_order: 15
@@ -194,7 +221,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/mistral_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/mistral/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/mistral:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/mistral:/var/log/mistral:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -214,20 +241,22 @@ outputs:
                   - /var/log/containers/mistral:/var/log/mistral:z
             # NOTE: dprince this requires that we install openstack-tripleo-common into
             # the Mistral API image so that we get tripleo* actions
-            command: "/usr/bin/bootstrap_host_exec mistral_api su mistral -s /bin/bash -c 'mistral-db-manage --config-file /etc/mistral/mistral.conf populate'"
+            command: "/usr/bin/bootstrap_host_exec mistral_api su mistral -s /bin/bash -c 'mistral-db-manage --config-file /etc/mistral/mistral.conf --openstack_actions_mapping_path=/etc/mistral/mapping.json populate'"
       host_prep_tasks:
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/mistral, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/mistral, 'setype': svirt_sandbox_file_t }
-        - name: mistral logs readme
+            - { 'path': /var/log/containers/mistral, 'setype': container_file_t, 'mode': '0750' }
+      deploy_steps_tasks:
+        - name: Copy in action mapping file
+          when: step|int == 3
           copy:
-            dest: /var/log/mistral/readme.txt
-            content: |
-              Log files from mistral containers can be found under
-              /var/log/containers/mistral.
-          ignore_errors: true
+            content: {get_file: ./mapping.json}
+            dest: '/var/lib/config-data/mistral/etc/mistral/mapping.json'
+            setype: container_file_t
+            force: yes
+            mode: '0755'

@@ -58,6 +58,12 @@ outputs:
     description: Role data for the OVN Dbs role.
     value:
       service_name: ovn_dbs
+      firewall_rules:
+        '121 OVN DB server ports':
+          proto: 'tcp'
+          dport:
+            - {get_param: OVNNorthboundServerPort}
+            - {get_param: OVNSouthboundServerPort}
       config_settings:
           ovn::northbound::port: {get_param: OVNNorthboundServerPort}
           ovn::southbound::port: {get_param: OVNSouthboundServerPort}
@@ -68,12 +74,6 @@ outputs:
                params:
                  $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
           tripleo::haproxy::ovn_dbs_manage_lb: true
-          tripleo::ovn_dbs::firewall_rules:
-            '121 OVN DB server ports':
-              proto: 'tcp'
-              dport:
-                - {get_param: OVNNorthboundServerPort}
-                - {get_param: OVNSouthboundServerPort}
       # BEGIN DOCKER SETTINGS
       # puppet_config is not required for this service since we configure
       # the NB and SB DB servers to listen on the proper IP address/port
@@ -83,44 +83,24 @@ outputs:
         config_volume: ''
         config_image: ''
         step_config: |
-          include ::tripleo::profile::base::neutron::ovn_northd #unused
+          include tripleo::profile::base::neutron::ovn_northd #unused
       kolla_config:
         /var/lib/kolla/config_files/ovn_north_db_server.json:
-          command:
-            list_join:
-            - ' '
-            - - '/usr/sbin/ovsdb-server'
-              - '/var/lib/openvswitch/ovnnb.db'
-              - '--pidfile=/run/openvswitch/ovnnb_db.pid'
-              - '-vconsole:emer -vsyslog:err -vfile:info'
-              - '--remote=punix:/run/openvswitch/ovnnb_db.sock'
-              - '--unixctl=/run/openvswitch/ovnnb_db.ctl'
-              - '--remote=db:OVN_Northbound,NB_Global,connections'
-              - '--private-key=db:OVN_Northbound,SSL,private_key'
-              - '--certificate=db:OVN_Northbound,SSL,certificate'
-              - '--ca-cert=db:OVN_Northbound,SSL,ca_cert'
-              - '--log-file=/var/log/openvswitch/ovsdb-server-nb.log'
+          command: /usr/local/bin/start-nb-db-server
           permissions:
             - path: /var/log/openvswitch
               owner: root:root
               recurse: true
+            - path: /var/log/ovn
+              owner: root:root
+              recurse: true
         /var/lib/kolla/config_files/ovn_south_db_server.json:
-          command:
-            list_join:
-            - ' '
-            - - '/usr/sbin/ovsdb-server'
-              - '/var/lib/openvswitch/ovnsb.db'
-              - '--pidfile=/run/openvswitch/ovnsb_db.pid'
-              - '-vconsole:emer -vsyslog:err -vfile:info'
-              - '--remote=punix:/run/openvswitch/ovnsb_db.sock'
-              - '--unixctl=/run/openvswitch/ovnsb_db.ctl'
-              - '--remote=db:OVN_Southbound,SB_Global,connections'
-              - '--private-key=db:OVN_Southbound,SSL,private_key'
-              - '--certificate=db:OVN_Southbound,SSL,certificate'
-              - '--ca-cert=db:OVN_Southbound,SSL,ca_cert'
-              - '--log-file=/var/log/openvswitch/ovsdb-server-sb.log'
+          command: /usr/local/bin/start-sb-db-server
           permissions:
             - path: /var/log/openvswitch
+              owner: root:root
+              recurse: true
+            - path: /var/log/ovn
               owner: root:root
               recurse: true
         /var/lib/kolla/config_files/ovn_northd.json:
@@ -136,44 +116,14 @@ outputs:
             - path: /var/log/openvswitch
               owner: root:root
               recurse: true
+            - path: /var/log/ovn
+              owner: root:root
+              recurse: true
       docker_config:
-        step_3:
-          ovn_north_db_init:
-            image: &northd_db_image {get_param: ContainerOvnNbDbImage}
-            net: host
-            privileged: false
-            detach: false
-            user: root
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/ovn_north_db_server.json:/var/lib/kolla/config_files/config.json:ro
-                  - /lib/modules:/lib/modules:ro
-                  - /var/lib/openvswitch/ovn:/var/lib/openvswitch:shared,z
-                  - /var/lib/openvswitch/ovn:/run/openvswitch:shared,z
-                  - /var/log/containers/openvswitch:/var/log/openvswitch:z
-            command: "ovsdb-tool create /var/lib/openvswitch/ovnnb.db /usr/share/openvswitch/ovn-nb.ovsschema"
-          ovn_south_db_init:
-            image: &south_db_image {get_param: ContainerOvnSbDbImage}
-            net: host
-            privileged: false
-            detach: false
-            user: root
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/ovn_north_db_server.json:/var/lib/kolla/config_files/config.json:ro
-                  - /lib/modules:/lib/modules:ro
-                  - /var/lib/openvswitch/ovn:/var/lib/openvswitch:shared,z
-                  - /var/lib/openvswitch/ovn:/run/openvswitch:shared,z
-                  - /var/log/containers/openvswitch:/var/log/openvswitch:z
-            command: "ovsdb-tool create /var/lib/openvswitch/ovnsb.db /usr/share/openvswitch/ovn-sb.ovsschema"
         step_4:
           ovn_north_db_server:
             start_order: 0
-            image: *northd_db_image
+            image: {get_param: ContainerOvnNbDbImage}
             net: host
             privileged: false
             restart: always
@@ -186,11 +136,16 @@ outputs:
                   - /var/lib/openvswitch/ovn:/var/lib/openvswitch:shared,z
                   - /var/lib/openvswitch/ovn:/run/openvswitch:shared,z
                   - /var/log/containers/openvswitch:/var/log/openvswitch:z
+                  - /var/lib/openvswitch/ovn:/var/lib/ovn:shared,z
+                  - /var/lib/openvswitch/ovn:/etc/openvswitch:shared,z
+                  - /var/lib/openvswitch/ovn:/etc/ovn:shared,z
+                  - /var/lib/openvswitch/ovn:/run/ovn:shared,z
+                  - /var/log/containers/openvswitch:/var/log/ovn:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
           ovn_south_db_server:
             start_order: 0
-            image: *south_db_image
+            image: {get_param: ContainerOvnSbDbImage}
             net: host
             privileged: false
             restart: always
@@ -203,6 +158,11 @@ outputs:
                   - /var/lib/openvswitch/ovn:/var/lib/openvswitch:shared,z
                   - /var/lib/openvswitch/ovn:/run/openvswitch:shared,z
                   - /var/log/containers/openvswitch:/var/log/openvswitch:z
+                  - /var/lib/openvswitch/ovn:/var/lib/ovn:shared,z
+                  - /var/lib/openvswitch/ovn:/etc/openvswitch:shared,z
+                  - /var/lib/openvswitch/ovn:/etc/ovn:shared,z
+                  - /var/lib/openvswitch/ovn:/run/ovn:shared,z
+                  - /var/log/containers/openvswitch:/var/log/ovn:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
           configure_ovn_north_db_server:
@@ -231,6 +191,8 @@ outputs:
                   - /lib/modules:/lib/modules:ro
                   - /var/lib/openvswitch/ovn:/run/openvswitch:shared,z
                   - /var/log/containers/openvswitch:/var/log/openvswitch:z
+                  - /var/lib/openvswitch/ovn:/run/ovn:shared,z
+                  - /var/log/containers/openvswitch:/var/log/ovn:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -239,15 +201,8 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/openvswitch, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/openvswitch/ovn, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/openvswitch, 'setype': openvswitch_log_t }
-        - name: openvswitch logs readme
-          copy:
-            dest: /var/log/openvswitch/readme.txt
-            content: |
-              Log files from openvswitch containers can be found under
-              /var/log/containers/openvswitch.
-          ignore_errors: true
+            - { 'path': /var/log/containers/openvswitch, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/openvswitch/ovn, 'setype': container_file_t }
       upgrade_tasks: []

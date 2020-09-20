@@ -2,7 +2,6 @@ resource_registry:
   OS::TripleO::Controller::Net::SoftwareConfig: ../common/net-config-multinode-os-net-config.yaml
   OS::TripleO::Compute::Net::SoftwareConfig: ../common/net-config-multinode-os-net-config.yaml
   OS::TripleO::Docker::NeutronMl2PluginBase: ../../deployment/neutron/neutron-plugin-ml2.yaml
-  OS::TripleO::Services::NeutronServer: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronApi: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronCorePlugin: ../../deployment/neutron/neutron-plugin-ml2-container-puppet.yaml
   OS::TripleO::Services::NeutronMetadataAgent: ../../deployment/neutron/neutron-metadata-container-puppet.yaml
@@ -27,14 +26,13 @@ resource_registry:
   OS::TripleO::Services::CinderApi: OS::Heat::None
   OS::TripleO::Services::CinderScheduler: OS::Heat::None
   OS::TripleO::Services::CinderBackup: OS::Heat::None
-  OS::TripleO::Services::CinderBackendVRTSHyperScale: OS::Heat::None
   OS::TripleO::Services::BlockStorageCinderVolume: OS::Heat::None
 parameter_defaults:
   ControllerServices:
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::Clustercheck
     - OS::TripleO::Services::ContainerImagePrepare
-    - OS::TripleO::Services::Docker
+    - OS::TripleO::Services::Podman
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::Keystone
     - OS::TripleO::Services::GlanceApi
@@ -43,7 +41,7 @@ parameter_defaults:
     - OS::TripleO::Services::HeatEngine
     - OS::TripleO::Services::MySQL
     - OS::TripleO::Services::MySQLClient
-    - OS::TripleO::Services::NeutronServer
+    - OS::TripleO::Services::NeutronApi
     - OS::TripleO::Services::NeutronCorePlugin
     - OS::TripleO::Services::NeutronDhcpAgent
     - OS::TripleO::Services::NeutronL3Agent
@@ -52,7 +50,6 @@ parameter_defaults:
     - OS::TripleO::Services::OsloMessagingRpc
     - OS::TripleO::Services::OsloMessagingNotify
     - OS::TripleO::Services::HAproxy
-    - OS::TripleO::Services::Keepalived
     - OS::TripleO::Services::Memcached
     - OS::TripleO::Services::Pacemaker
     - OS::TripleO::Services::NovaConductor
@@ -78,6 +75,7 @@ parameter_defaults:
     nova::compute::libvirt::libvirt_cpu_mode: 'none'
   # For ML2/OVS
   NeutronMechanismDrivers: 'openvswitch'
+  NeutronPluginExtensions: "qos,port_security"
   NeutronTypeDrivers: 'vxlan,vlan,flat,gre'
   NeutronNetworkType: 'vxlan'
   NeutronServicePlugins: 'router,qos,segments,trunk'

@@ -53,9 +53,17 @@ parameters:
     description: Path to use when file driver is used. This could be NFS or a
       flat file.
     type: string
+  GnocchiNfsEnabled:
+    default: false
+    description: >
+      When using GnocchiBackend 'file', mount NFS share for data storage
+    type: boolean
   MonitoringSubscriptionGnocchiStatsd:
     default: 'overcloud-gnocchi-statsd'
     type: string
+
+conditions:
+  nfs_backend_enabled: {equals: [{get_param: GnocchiNfsEnabled}, true]}
 
 resources:
 
@@ -80,14 +88,12 @@ outputs:
     description: Role data for the Gnocchi API role.
     value:
       service_name: gnocchi_statsd
+      firewall_rules:
+        '140 gnocchi-statsd':
+          dport: 8125
+          proto: 'udp'
       monitoring_subscription: {get_param: MonitoringSubscriptionGnocchiStatsd}
-      config_settings:
-        map_merge:
-          - get_attr: [GnocchiServiceBase, role_data, config_settings]
-          - tripleo::gnocchi_statsd::firewall_rules:
-              '140 gnocchi-statsd':
-                dport: 8125
-                proto: 'udp'
+      config_settings: {get_attr: [GnocchiServiceBase, role_data, config_settings]}
       service_config_settings: {get_attr: [GnocchiServiceBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS
       puppet_config:
@@ -96,7 +102,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::base::gnocchi::statsd"
+            - - "include tripleo::profile::base::gnocchi::statsd"
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerGnocchiConfigImage}
       kolla_config:
@@ -138,12 +144,18 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/gnocchi_statsd.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/gnocchi/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/gnocchi:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/gnocchi:/var/log/gnocchi:z
                   - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
                   - str_replace:
                       template: GNOCCHI_FILE_BASE_PATH:GNOCCHI_FILE_BASE_PATH:SE_FLAGS
-                      params: {GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}, SE_FLAGS: 'shared,z'}
+                      params:
+                        GNOCCHI_FILE_BASE_PATH: {get_param: GnocchiFileBasePath}
+                        SE_FLAGS:
+                          if:
+                            - nfs_backend_enabled
+                            - 'shared'
+                            - 'shared,z'
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -152,21 +164,14 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/gnocchi, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/gnocchi, 'setype': svirt_sandbox_file_t }
-        - name: gnocchi logs readme
-          copy:
-            dest: /var/log/gnocchi/readme.txt
-            content: |
-              Log files from gnocchi containers can be found under
-              /var/log/containers/gnocchi and /var/log/containers/httpd/gnocchi-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/gnocchi, 'setype': container_file_t, 'mode': '0750' }
         - name: create persistent data directory
           file:
             path: {get_param: GnocchiFileBasePath}
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: ensure ceph configurations exist
           file:
             path: /etc/ceph
@@ -182,28 +187,8 @@ outputs:
           block:
             - name: Stop gnocchi statsd container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - gnocchi_statsd
                 tripleo_delegate_to: "{{ groups['gnocchi_statsd'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - name: FFU check if openstack-gnocchi-statsd is deployed
-          command: systemctl is-enabled --quiet openstack-gnocchi-statsd
-          ignore_errors: True
-          register: gnocchi_statsd_enabled_result
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Set fact gnocchi_statsd_enabled
-          set_fact:
-            gnocchi_statsd_enabled: "{{ gnocchi_statsd_enabled_result.rc == 0 }}"
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: FFU stop and disable openstack-gnocchi-statsd service
-          service: name=openstack-gnocchi-statsd state=stopped enabled=no
-          when:
-            - step|int == 2
-            - release == 'ocata'
-            - gnocchi_statsd_enabled|bool

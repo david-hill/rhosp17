@@ -46,40 +46,6 @@ parameters:
     default: ''
     description: Address prefix for Notification addresses
     type: string
-  MetricsQdrPort:
-    default: '5666'
-    description: Service name or port number on which the qdrouterd will accept
-                 connections. This argument must be string, even if the numeric
-                 form is used.
-    type: string
-  ManageEventPipeline:
-    default: true
-    description: Whether to manage event_pipeline.yaml.
-    type: boolean
-  EventPipelinePublishers:
-    default: []
-    description: >
-        A list of publishers to put in event_pipeline.yaml. When the
-        collector is used, override this with notifier:// publisher.
-        If zaqar is enabled, you can also publish to a zaqar queue
-        by including "zaqar://?queue=queue_name" in this list.
-        Set ManageEventPipeline to true for override to take effect.
-    type: comma_delimited_list
-  ManagePipeline:
-    default: false
-    description: Whether to manage pipeline.yaml.
-    type: boolean
-  PipelinePublishers:
-    default: []
-    description: >
-        A list of publishers to put in pipeline.yaml. When the
-        collector is used, override this with notifier:// publisher.
-        Set ManagePipeline to true for override to take effect.
-    type: comma_delimited_list
-  CeilometerQdrPublish:
-    default: false
-    description: Whether to send telemetry data to Qdr.
-    type: boolean
   ManagePolling:
     default: false
     description: Whether to manage polling.yaml.
@@ -141,17 +107,8 @@ outputs:
               - service_debug_unset
               - {get_param: Debug }
               - {get_param: CeilometerDebug }
-            ceilometer::keystone::authtoken::project_name: 'service'
-            ceilometer::keystone::authtoken::user_domain_name: 'Default'
-            ceilometer::keystone::authtoken::project_domain_name: 'Default'
-            ceilometer::keystone::authtoken::password: {get_param: CeilometerPassword}
-            ceilometer::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
-            ceilometer::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
-            ceilometer::keystone::authtoken::auth_url: { get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             ceilometer::agent::auth::auth_password: {get_param: CeilometerPassword}
             ceilometer::agent::auth::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
-            ceilometer::agent::notification::manage_event_pipeline: {get_param: ManageEventPipeline}
-            ceilometer::agent::notification::manage_pipeline: {get_param: ManagePipeline}
             ceilometer::agent::polling::manage_polling: {get_param: ManagePolling}
             ceilometer::agent::auth::auth_region: {get_param: KeystoneRegion}
             ceilometer::agent::auth::auth_tenant_name: 'service'
@@ -165,25 +122,7 @@ outputs:
             ceilometer::snmpd_readonly_username: {get_param: SnmpdReadonlyUserName}
             ceilometer::snmpd_readonly_user_password: {get_param: SnmpdReadonlyUserPassword}
             ceilometer::host: "%{hiera('fqdn_canonical')}"
-            tripleo::profile::base::ceilometer::event_pipeline_publishers: {get_param: EventPipelinePublishers}
-            tripleo::profile::base::ceilometer::pipeline_publishers: {get_param: PipelinePublishers}
-          - if: #Ceilometer connection to qdr
-            - ceilometer_qdr_publish
-            - tripleo::profile::base::ceilometer::notifier_host_addr:
-                str_replace:
-                  template:
-                    "%{hiera('$NETWORK')}"
-                  params:
-                    $NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
-              tripleo::profile::base::ceilometer::notifier_host_port: {get_param: MetricsQdrPort}
-            - {}
       service_config_settings:
         keystone:
-          ceilometer_auth_enabled: true
-          # NOTE(aschultz): no endpoints since ceilometer api removal
-          ceilometer::keystone::auth::configure_endpoint: false
-          ceilometer::keystone::auth::password: {get_param: CeilometerPassword}
-          ceilometer::keystone::auth::region: {get_param: KeystoneRegion}
-          ceilometer::keystone::auth::tenant: 'service'
           # Enable default notification queue
           tripleo::profile::base::keystone::ceilometer_notification_topics: ["notifications"]

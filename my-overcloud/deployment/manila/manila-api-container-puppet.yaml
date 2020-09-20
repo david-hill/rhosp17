@@ -94,6 +94,32 @@ outputs:
     description: Role data for the Manila API role.
     value:
       service_name: manila_api
+      firewall_rules:
+        '150 manila':
+          dport:
+            - 8786
+            - 13786
+      keystone_resources:
+        manila:
+          endpoints:
+            public: {get_param: [EndpointMap, ManilaV1Public, uri]}
+            internal: {get_param: [EndpointMap, ManilaV1Internal, uri]}
+            admin: {get_param: [EndpointMap, ManilaV1Admin, uri]}
+          users:
+            manila:
+              password: {get_param: ManilaPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'share'
+        manilav2:
+          endpoints:
+            public: {get_param: [EndpointMap, ManilaPublic, uri]}
+            internal: {get_param: [EndpointMap, ManilaInternal, uri]}
+            admin: {get_param: [EndpointMap, ManilaAdmin, uri]}
+          users:
+            manilav2:
+              password: {get_param: ManilaPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'sharev2'
       monitoring_subscription: {get_param: MonitoringSubscriptionManilaApi}
       config_settings:
         map_merge:
@@ -105,11 +131,7 @@ outputs:
             manila::keystone::authtoken::project_name: 'service'
             manila::keystone::authtoken::user_domain_name: 'Default'
             manila::keystone::authtoken::project_domain_name: 'Default'
-            tripleo::manila_api::firewall_rules:
-              '150 manila':
-                dport:
-                  - 8786
-                  - 13786
+            manila::keystone::authtoken::region_name: {get_param: KeystoneRegion}
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -142,19 +164,7 @@ outputs:
               - manila_workers_zero
               - {}
               - manila::wsgi::apache::workers: {get_param: ManilaWorkers}
-      service_config_settings:
-        map_merge:
-          - get_attr: [ManilaBase, role_data, service_config_settings]
-          - keystone:
-              manila::keystone::auth::tenant: 'service'
-              manila::keystone::auth::public_url: {get_param: [EndpointMap, ManilaV1Public, uri]}
-              manila::keystone::auth::internal_url: {get_param: [EndpointMap, ManilaV1Internal, uri]}
-              manila::keystone::auth::admin_url: {get_param: [EndpointMap, ManilaV1Admin, uri]}
-              manila::keystone::auth::public_url_v2: {get_param: [EndpointMap, ManilaPublic, uri]}
-              manila::keystone::auth::internal_url_v2: {get_param: [EndpointMap, ManilaInternal, uri]}
-              manila::keystone::auth::admin_url_v2: {get_param: [EndpointMap, ManilaAdmin, uri]}
-              manila::keystone::auth::password: {get_param: ManilaPassword}
-              manila::keystone::auth::region: {get_param: KeystoneRegion}
+      service_config_settings: {get_attr: [ManilaBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS #
       puppet_config:
         config_volume: manila
@@ -162,7 +172,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::base::manila::api"
+            - - "include tripleo::profile::base::manila::api"
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerManilaConfigImage}
       kolla_config:
@@ -171,6 +181,13 @@ outputs:
           config_files:
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
+              merge: false
+              preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -219,17 +236,17 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/manila_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/manila:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/manila:/var/log/manila:z
                   - /var/log/containers/httpd/manila-api:/var/log/httpd:z
-                  - if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  - if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       metadata_settings:
@@ -240,47 +257,8 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/manila-api, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
-        - name: manila logs readme
-          copy:
-            dest: /var/log/manila/readme.txt
-            content: |
-              Log files from manila containers can be found under
-              /var/log/containers/manila and /var/log/containers/httpd/manila-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/manila, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/containers/httpd/manila-api, 'setype': container_file_t, 'mode': '0750' }
       upgrade_tasks: []
-      fast_forward_upgrade_tasks:
-        - name: Check if manila_api is deployed
-          command: systemctl is-enabled --quiet openstack-manila-api
-          ignore_errors: True
-          register: manila_api_enabled_result
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Set fact manila_api_enabled
-          set_fact:
-            manila_api_enabled: "{{ manila_api_enabled_result.rc == 0 }}"
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Stop openstack-manila-api
-          service: name=openstack-manila-api state=stopped
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - manila_api_enabled|bool
-        - name: manila package update
-          package:
-            name: 'openstack-manila*'
-            state: latest
-          when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-        - name: Manila db sync
-          command: manila-manage db sync
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool

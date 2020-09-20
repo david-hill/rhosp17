@@ -45,11 +45,10 @@ parameters:
     description: Keystone region for endpoint
     default: 'regionOne'
   MetricsQdrPort:
-    default: '5666'
+    default: 5666
     description: Service name or port number on which the qdrouterd will accept
-                 connections. This argument must be string, even if the numeric
-                 form is used.
-    type: string
+                 connections.
+    type: number
   MetricsQdrUsername:
     default: 'guest'
     description: Username which should be used to authenticate to the deployed
@@ -65,7 +64,7 @@ parameters:
     default: 'overcloud-collectd'
     type: string
   CollectdConnectionType:
-    default: 'gnocchi'
+    default: 'amqp1'
     description: Define which write plugin should collectd use. Currently
                  supported are 'amqp1', 'network' and 'gnocchi'.
     type: string
@@ -87,7 +86,6 @@ parameters:
       - load
       - memory
       - processes
-      - tcpconns
       - unixsock
       - uptime
     type: comma_delimited_list
@@ -235,17 +233,32 @@ parameters:
     type: number
     description: Minimum number of values Gnocchi should batch.
     default: 10
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
+  CollectdSQLAlchemyLogMessages:
+    type: string
+    description: set to "debug" to enable message logging.
+    default: 'info'
+  CollectdSQLAlchemyBindHost:
+    type: string
+    description: >
+      hostname for SQLAlchemy-collectd plugin to bind on.  defaults
+      to localhost.
+    default: 'localhost'
   CollectdAmqpHost:
     type: string
     description: Hostname or IP address of the AMQP 1.0 intermediary.
     default: nil
   CollectdAmqpPort:
-    type: string
+    type: number
     description: >
       Service name or port number on which the AMQP 1.0 intermediary accepts
       connections. This argument must be a string, even if the numeric form
       is used.
-    default: '5666'
+    default: 5666
   CollectdAmqpUser:
     type: string
     description: >
@@ -290,6 +303,12 @@ parameters:
     type: boolean
     description: Set to true if sensubility should be executed by exec plugin.
     default: false
+  CollectdSensubilityExecSudoRule:
+    type: string
+    description: >
+      Given rule will be created in /etc/sudoers.d for sensubility to enable it calling
+      restricted commands via sensubility executor.
+    default: ''
   CollectdSensubilityLogLevel:
     type: string
     description: Use for override the default logging level (WARNING).
@@ -327,21 +346,14 @@ parameters:
   CollectdContainerHealthCheckCommand:
     type: string
     default: |
-      output=''
-      for i in $(systemctl list-timers --no-pager --no-legend "tripleo*healthcheck.timer" | awk '{print $14}'); do
-        i=${i%.timer}
-        if result=$(systemctl show $i --property=ActiveState | awk '{split($0,a,/=/); print a[2]}'); then
-          if [ "$result" == 'failed' ]; then
-            timestamp=$(systemctl show $i --property=InactiveEnterTimestamp | awk '{print $2, $3}' )
-            log=$(journalctl -u $i -t podman --since "${timestamp}" --no-pager --output=cat --directory /var/log/journal)
-            if [ !  -z  "$output" ]; then
-              output="$i: $log ; $output"
-            else
-              output="$i: $log"
-            fi
-          fi
-        fi
-      done
+      output=""
+      while read line ; do
+        i=$(echo $line | awk '//{gsub(/:/, "", $0); print $5}')
+        log=$(echo $line | awk '{split($0,a,/:\s+Error:\s+/); print a[2]}')
+        log=${log:0:-1}
+        output+=" ; ${i}: ${log}"
+      done < <(egrep "^[a-zA-Z]{3}\s+[0-9]{2}\s+[0-9\:]{8}\s+.*\s+.*:\s+[Ee]rror\:" /var/log/collectd/healthchecks.log)
+      truncate -s0 /var/log/collectd/healthchecks.log
       if [ ! -z "${output}" ]; then
         echo ${output:3} && exit 2;
       fi
@@ -361,6 +373,14 @@ parameters:
     type: number
     description: The number of seconds sensu-plugin-aware handlers should wait before taking second action.
     default: 90
+  EnableSTF:
+    type: boolean
+    description: Set to true to enable configuration for STF client.
+    default: false
+  CollectdEnableMcelog:
+    type: boolean
+    description: Set to true to enable mcelog
+    default: false
 
 conditions:
   amqp_connection:
@@ -381,6 +401,12 @@ conditions:
       - equals: [{get_param: CollectdGnocchiKeystoneEndpoint}, nil]
   enable_sensubility:
     equals: [{get_param: CollectdEnableSensubility}, true]
+  enable_stf:
+    equals: [{get_param: EnableSTF}, true]
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
+  sensubility_needs_sudo:
+    not:
+      equals: [{get_param: CollectdSensubilityExecSudoRule}, '']
 
 resources:
   ContainersCommon:
@@ -400,17 +426,39 @@ outputs:
             collectd::recurse: true
             collectd::purge_config: true
             collectd::minimum_version: "5.7"
-            collectd::plugin::unixsock::socketgroup: root
-            collectd::plugin::unixsock::socketfile: /var/run/collectd-socket
-            collectd::plugin::unixsock::deletesocket: true
             collectd::interval: {get_param: CollectdDefaultPollingInterval}
+            collectd::plugin::unixsock::socketgroup: root
+            collectd::plugin::unixsock::socketfile: /run/collectd-socket
+            collectd::plugin::unixsock::deletesocket: true
+            collectd::plugin::cpu::reportbycpu: true
+            collectd::plugin::cpu::reportbystate: true
+            collectd::plugin::cpu::reportnumcpu: false
+            collectd::plugin::cpu::valuespercentage: true
+            collectd::plugin::df::ignoreselected: true
+            collectd::plugin::df::reportbydevice: true
+            collectd::plugin::df::fstypes: ['xfs']
+            collectd::plugin::load::reportrelative: true
+            collectd::plugin::virt::connection: "qemu:///system"
+            collectd::plugin::virt::extra_stats: "cpu_util disk disk_err pcpu job_stats_background perf vcpupin"
+            collectd::plugin::virt::hostname_format: "hostname"
             tripleo.collectd.plugins.collectd:
               yaql:
                 data:
                   default_plugins: {get_param: CollectdDefaultPlugins}
+                  stf_plugins:
+                    if:
+                    - enable_stf
+                    - - cpu
+                      - df
+                      - load
+                      - connectivity
+                      - intel_rdt
+                      - ipmi
+                      - procevent
+                    - []
                   extra_plugins: {get_param: CollectdExtraPlugins}
                 expression: >
-                  ($.data.default_plugins + $.data.extra_plugins)
+                  ($.data.default_plugins + $.data.stf_plugins + $.data.extra_plugins)
                   .flatten().distinct()
           - if: # Collectd connected to QDR
             - amqp_connection
@@ -435,7 +483,13 @@ outputs:
                       template:
                         "%{hiera('$NETWORK')}"
                       params:
-                        $NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
+                        $NETWORK:
+                          get_param:
+                            - ServiceNetMap
+                            - str_replace:
+                                template: "ROLENAMEMetricsQdrNetwork"
+                                params:
+                                  ROLENAME: {get_param: RoleName}
                   tripleo::profile::base::metrics::collectd::amqp_port:
                     get_param: MetricsQdrPort
                   tripleo::profile::base::metrics::collectd::amqp_user:
@@ -463,6 +517,16 @@ outputs:
                 get_param: CollectdPassword
               tripleo::profile::base::metrics::collectd::collectd_securitylevel:
                 get_param: CollectdSecurityLevel
+            - {}
+          - if:
+            - enable_sqlalchemy_collectd
+            - map_merge:
+              - tripleo::profile::base::metrics::collectd::enable_sqlalchemy_collectd:
+                  true
+              - tripleo::profile::base::metrics::collectd::sqlalchemy_collectd_bind_host:
+                  get_param: CollectdSQLAlchemyBindHost
+              - tripleo::profile::base::metrics::collectd::sqlalchemy_collectd_log_messages:
+                  get_param: CollectdSQLAlchemyLogMessages
             - {}
           - if: # Collectd connected directly to Gnocchi DB
             - gnocchi_connection
@@ -526,47 +590,65 @@ outputs:
             - {}
           - if: # Collectd should run collectd-sensubility via collectd-exec
             - enable_sensubility
-            - tripleo::profile::base::metrics::collectd::enable_sensubility:
-                get_param: CollectdEnableSensubility
-              tripleo::profile::base::metrics::collectd::sensubility::connection:
-                get_param: CollectdSensubilityConnection
-              tripleo::profile::base::metrics::collectd::sensubility::log_level:
-                get_param: CollectdSensubilityLogLevel
-              tripleo::profile::base::metrics::collectd::sensubility::client_name:
-                str_replace:
-                  template: "%{hiera('fqdn_NETWORK')}"
-                  params:
-                    NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
-              tripleo::profile::base::metrics::collectd::sensubility::client_address:
-                str_replace:
-                  template: "%{hiera('NETWORK')}"
-                  params:
-                    NETWORK: {get_param: [ServiceNetMap, MetricsQdrNetwork]}
-              tripleo::profile::base::metrics::collectd::sensubility::keepalive_interval:
-                get_param: CollectdSensubilityKeepaliveInterval
-              tripleo::profile::base::metrics::collectd::sensubility::tmp_base_dir:
-                get_param: CollectdSensubilityTmpDir
-              tripleo::profile::base::metrics::collectd::sensubility::shell_path:
-                get_param: CollectdSensubilityShellPath
-              tripleo::profile::base::metrics::collectd::sensubility::worker_count:
-                get_param: CollectdSensubilityWorkerCount
-              tripleo::profile::base::metrics::collectd::sensubility::checks:
-                map_merge:
-                  - {get_param: CollectdSensubilityChecks}
-                  - check-container-health:
-                      standalone: true
-                      command: {get_param: CollectdContainerHealthCheckCommand}
-                      interval: {get_param: CollectdContainerHealthCheckInterval}
-                      handlers: {get_param: CollectdContainerHealthCheckHandlers}
-                      occurrences: {get_param: CollectdContainerHealthCheckOccurrences}
-                      refresh: {get_param: CollectdContainerHealthCheckRefresh}
+            - map_merge:
+              - if:
+                - sensubility_needs_sudo
+                - tripleo::profile::base::metrics::collectd::sensubility::exec_sudo_rule:
+                    get_param: CollectdSensubilityExecSudoRule
+                - {}
+              - tripleo::profile::base::metrics::collectd::enable_sensubility:
+                  get_param: CollectdEnableSensubility
+                tripleo::profile::base::metrics::collectd::sensubility::connection:
+                  get_param: CollectdSensubilityConnection
+                tripleo::profile::base::metrics::collectd::sensubility::log_level:
+                  get_param: CollectdSensubilityLogLevel
+                tripleo::profile::base::metrics::collectd::sensubility::client_name:
+                  str_replace:
+                    template: "%{hiera('fqdn_NETWORK')}"
+                    params:
+                      NETWORK:
+                        get_param:
+                          - ServiceNetMap
+                          - str_replace:
+                              template: "ROLENAMEMetricsQdrNetwork"
+                              params:
+                                ROLENAME: {get_param: RoleName}
+                tripleo::profile::base::metrics::collectd::sensubility::client_address:
+                  str_replace:
+                    template: "%{hiera('NETWORK')}"
+                    params:
+                      NETWORK:
+                        get_param:
+                          - ServiceNetMap
+                          - str_replace:
+                              template: "ROLENAMEMetricsQdrNetwork"
+                              params:
+                                ROLENAME: {get_param: RoleName}
+                tripleo::profile::base::metrics::collectd::sensubility::keepalive_interval:
+                  get_param: CollectdSensubilityKeepaliveInterval
+                tripleo::profile::base::metrics::collectd::sensubility::tmp_base_dir:
+                  get_param: CollectdSensubilityTmpDir
+                tripleo::profile::base::metrics::collectd::sensubility::shell_path:
+                  get_param: CollectdSensubilityShellPath
+                tripleo::profile::base::metrics::collectd::sensubility::worker_count:
+                  get_param: CollectdSensubilityWorkerCount
+                tripleo::profile::base::metrics::collectd::sensubility::checks:
+                  map_merge:
+                    - {get_param: CollectdSensubilityChecks}
+                    - check-container-health:
+                        standalone: true
+                        command: {get_param: CollectdContainerHealthCheckCommand}
+                        interval: {get_param: CollectdContainerHealthCheckInterval}
+                        handlers: {get_param: CollectdContainerHealthCheckHandlers}
+                        occurrences: {get_param: CollectdContainerHealthCheckOccurrences}
+                        refresh: {get_param: CollectdContainerHealthCheckRefresh}
             - {}
       service_config_settings: {}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: collectd
-        puppet_tags:  collectd_client_config
-        step_config: include ::tripleo::profile::base::metrics::collectd
+        puppet_tags:  collectd_client_config,exec
+        step_config: include tripleo::profile::base::metrics::collectd
         config_image: {get_param: ContainerCollectdConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/collectd.json:
@@ -601,45 +683,60 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/collectd.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/collectd/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/collectd:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/collectd:/var/log/collectd:rw,z
-                  - /var/run/:/var/run:rw,z
-                  - /var/log/journal:/var/log/journal:ro
+                  - /run/:/run:rw
                   - /sys/fs/cgroup:/sys/fs/cgroup:ro
-                  - /usr/lib/systemd/system:/usr/lib/systemd/system:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
+      deploy_steps_tasks:
+        - name: set enable_sensubility fact
+          set_fact:
+            enable_sensubility: {get_param: CollectdEnableSensubility}
+        - name: Configure rsyslog for container healthchecks
+          when:
+            - step|int == 1
+          block:
+            - name: Check if rsyslog exists
+              shell: systemctl list-unit-files --type=service | grep -q rsyslog
+              register: rsyslog_config
+              failed_when: rsyslog_config.rc == 2
+            - name: Configure if we can
+              when:
+                - rsyslog_config is changed
+                - rsyslog_config.rc == 0
+              block:
+                - name: Log healthchecks in dedicated file
+                  when:
+                    - enable_sensubility|bool
+                  register: logconfig_add
+                  copy:
+                    dest: /etc/rsyslog.d/openstack-healthcheck.conf
+                    content: |
+                      if $programname startswith 'healthcheck_' then -/var/log/containers/collectd/healthchecks.log
+                      & stop
+                - name: Remove healthcheck log
+                  when:
+                    - not enable_sensubility|bool
+                  register: logconfig_rm
+                  file:
+                    path: /etc/rsyslog.d/openstack-healthcheck.conf
+                    state: absent
+                - name: Reload rsyslogd if needed
+                  when: logconfig_add is changed or logconfig_rm is changed
+                  service:
+                    name: rsyslog
+                    state: restarted
       host_prep_tasks:
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/collectd, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/collectd, 'setype': svirt_sandbox_file_t }
-        - name: collectd logs readme
-          copy:
-            dest: /var/log/collectd/readme.txt
-            content: |
-              Log files from collectd containers can be found under
-              /var/log/containers/collectd.
-          ignore_errors: true
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if collectd.service is deployed
-              command: systemctl is-enabled --quiet collectd.service
-              ignore_errors: True
-              register: collectd_enabled_result
-            - name: Set fact collectd_enabled
-              set_fact:
-                collectd_enabled: "{{ collectd_enabled_result.rc == 0 }}"
-        - name: Stop collectd service
-          service: name=collectd.service state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - collectd_enabled|bool
+            - { 'path': /var/log/containers/collectd, 'setype': container_file_t, 'mode': '0750' }
+        - name: import provision_mcelog
+          import_role:
+            name: tripleo_provision_mcelog
+          when: {get_param: CollectdEnableMcelog}

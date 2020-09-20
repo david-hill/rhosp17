@@ -1,7 +1,8 @@
 heat_template_version: rocky
 description: >
   Software Config to drive os-net-config for a simple bridge configured with a
-  static IP address for the ctlplane network.
+  static IP address for the ctlplane network with optionally the admin and
+  public IPs too.
 parameters:
   ControlPlaneIp:
     default: ''
@@ -81,11 +82,18 @@ parameters:
         tripleoclient to provide an easy means to pass in custom net configs
         for a standalone node.
     type: json
+  DeployedServerPortMap:
+    default: {}
+    type: json
 
 conditions:
   standalone_net_config_override:
     not:
       equals: [{get_param: StandaloneNetConfigOverride}, {}]
+  control_virtual_ip_unset: {equals : [{get_param: [DeployedServerPortMap, 'control_virtual_ip', fixed_ips, 0, ip_address]}, '']}
+  public_virtual_ip_unset: {equals : [{get_param: [DeployedServerPortMap, 'public_virtual_ip', fixed_ips, 0, ip_address]}, '']}
+  control_virtual_ip_is_ipv6: {contains: [':', {get_param: [DeployedServerPortMap, 'control_virtual_ip', fixed_ips, 0, ip_address]}]}
+  public_virtual_ip_is_ipv6: {contains: [':', {get_param: [DeployedServerPortMap, 'public_virtual_ip', fixed_ips, 0, ip_address]}]}
 
 resources:
   OsNetConfigImpl:
@@ -121,6 +129,24 @@ resources:
                       - /
                       - - get_param: ControlPlaneIp
                         - get_param: ControlPlaneSubnetCidr
+                  -
+                    if:
+                    - control_virtual_ip_unset
+                    - {}
+                    - ip_netmask:
+                        list_join:
+                        - /
+                        - - {get_param: [DeployedServerPortMap, 'control_virtual_ip', fixed_ips, 0, ip_address]}
+                          - {if: [control_virtual_ip_is_ipv6, '128', '32']}
+                  -
+                    if:
+                    - public_virtual_ip_unset
+                    - {}
+                    - ip_netmask:
+                        list_join:
+                        - /
+                        - - {get_param: [DeployedServerPortMap, 'public_virtual_ip', fixed_ips, 0, ip_address]}
+                          - {if: [public_virtual_ip_is_ipv6, '128', '32']}
                   routes: {get_param: ControlPlaneStaticRoutes}
                   members:
                   - type: interface

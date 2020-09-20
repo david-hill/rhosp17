@@ -1,12 +1,11 @@
-{%- set _service_nets = {} -%}
-{%- for network in networks if network.enabled|default(true) -%}
-  {%- if network.service_net_map_replace is defined -%}
-    {%- set _service_nets = _service_nets.update({network.service_net_map_replace:network.name_lower}) -%}
-  {%- else -%}
-    {%- set _service_nets = _service_nets.update({network.name_lower:network.name_lower}) -%}
-  {%- endif -%}
-{%- endfor -%}
-
+{% set _service_nets = {} %}
+{% for network in networks if network.enabled|default(true) %}
+{%   if network.service_net_map_replace is defined %}
+{%     set _ = _service_nets.update({network.service_net_map_replace:network.name_lower}) %}
+{%   else %}
+{%     set _ = _service_nets.update({network.name_lower:network.name_lower}) %}
+{%   endif %}
+{% endfor %}
 heat_template_version: rocky
 
 description: >
@@ -42,13 +41,13 @@ parameters:
       CinderApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       CinderIscsiNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       GlanceApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
+      GlanceApiEdgeNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       IronicApiNetwork: ctlplane
       IronicNetwork: ctlplane
       IronicInspectorNetwork: ctlplane
       KeystoneAdminApiNetwork: ctlplane # allows undercloud to config endpoints
       KeystonePublicApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       ManilaApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
-      MetricsQdrNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       NeutronApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       OctaviaApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       HeatApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
@@ -60,8 +59,6 @@ parameters:
       NovaVncProxyNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       NovaLibvirtNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       NovajoinNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
-      Ec2ApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
-      Ec2ApiMetadataNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       SwiftStorageNetwork: {{ _service_nets.get('storage_mgmt', 'ctlplane') }}
       SwiftProxyNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       SaharaApiNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
@@ -76,6 +73,7 @@ parameters:
       MysqlNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       SnmpdNetwork: ctlplane
       CephClusterNetwork: {{ _service_nets.get('storage_mgmt', 'ctlplane') }}
+      CephDashboardNetwork: ctlplane
       CephGrafanaNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       CephMonNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       CephRgwNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
@@ -98,8 +96,20 @@ parameters:
       {{role.name}}HostnameResolveNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
 {%- endfor %}
 {%- for role in roles if not role.name.startswith('Ceph') %}
+    {%- if 'InternalApi' in role.networks %}
       {{role.name}}HostnameResolveNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
+    {%- else %}
+      {{role.name}}HostnameResolveNetwork: ctlplane
+    {%- endif %}
 {%- endfor %}
+      # special-case for MetricsQdrNetwork, which will vary depending on role
+{%- for role in roles if role.name == 'CephStorage' or role.name == 'BlockStorage' or role.name == 'ObjectStorage' %}
+      {{role.name}}MetricsQdrNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
+{%- endfor %}
+{%- for role in roles if role.name != 'CephStorage' and role.name != 'BlockStorage' and role.name != 'ObjectStorage' %}
+      {{role.name}}MetricsQdrNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
+{%- endfor %}
+
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.
     type: json

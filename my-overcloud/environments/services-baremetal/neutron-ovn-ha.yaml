@@ -20,12 +20,16 @@ parameter_defaults:
   OVNQosDriver: ovn-qos
   NeutronTypeDrivers: 'geneve,vlan,flat'
   NeutronNetworkType: 'geneve'
-  NeutronServicePlugins: 'qos,ovn-router,trunk,segments'
+  NeutronServicePlugins: 'qos,ovn-router,trunk,segments,port_forwarding'
   NeutronVniRanges: ['1:65536', ]
   NeutronPluginExtensions: "qos,port_security,dns"
   ComputeParameters:
     NeutronBridgeMappings: ""
   ControllerParameters:
     OVNCMSOptions: "enable-chassis-as-gw"
+  ControllerSriovParameters:
+    OVNCMSOptions: "enable-chassis-as-gw"
   NetworkerParameters:
+    OVNCMSOptions: "enable-chassis-as-gw"
+  NetworkerSriovParameters:
     OVNCMSOptions: "enable-chassis-as-gw"

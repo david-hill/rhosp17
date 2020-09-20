@@ -14,11 +14,16 @@
 import argparse
 import os
 import re
+import six
 import sys
 import traceback
 import yaml
 
 from copy import copy
+
+
+def is_string(value):
+    return isinstance(value, six.string_types)
 
 # Only permit the template alias versions.
 # The current template version should be the last element.
@@ -43,14 +48,15 @@ envs_containing_endpoint_map = ['no-tls-endpoints-public-ip.yaml',
                                 'tls-endpoints-public-ip.yaml',
                                 'tls-everywhere-endpoints-dns.yaml']
 ENDPOINT_MAP_FILE = 'endpoint_map.yaml'
-OPTIONAL_SECTIONS = ['cellv2_discovery']
+OPTIONAL_SECTIONS = ['ansible_group_vars',
+                     'cellv2_discovery',
+                     'firewall_rules',
+                     'keystone_resources']
 REQUIRED_DOCKER_SECTIONS = ['service_name', 'docker_config', 'puppet_config',
                             'config_settings']
 OPTIONAL_DOCKER_SECTIONS = ['container_puppet_tasks', 'upgrade_tasks',
                             'deploy_steps_tasks',
                             'pre_upgrade_rolling_tasks',
-                            'fast_forward_upgrade_tasks',
-                            'fast_forward_post_upgrade_tasks',
                             'post_upgrade_tasks', 'update_tasks',
                             'post_update_tasks', 'service_config_settings',
                             'host_prep_tasks', 'metadata_settings',
@@ -60,10 +66,40 @@ OPTIONAL_DOCKER_SECTIONS = ['container_puppet_tasks', 'upgrade_tasks',
                             'container_config_scripts', 'step_config',
                             'monitoring_subscription', 'scale_tasks',
                             'external_update_tasks', 'external_upgrade_tasks']
+REQUIRED_DOCKER_SECTIONS_OVERRIDES = {
+    # Runs puppet within a container
+    './deployment/neutron/neutron-agents-ib-config-container-puppet.yaml': [
+        'service_name',
+        'docker_config',
+        'config_settings'
+    ],
+    # Just sets hieradata
+    './deployment/neutron/neutron-ovn-dpdk-config-container-puppet.yaml': [
+        'service_name',
+        'config_settings'
+    ],
+    # Does not deploy container
+    './deployment/ceilometer/ceilometer-base-container-puppet.yaml': [
+        'service_name',
+        'config_settings'
+    ],
+    # Does not manage container using docker_config
+    './deployment/nova/nova-libvirt-guests-container-puppet.yaml': [
+        'service_name',
+        'puppet_config',
+        'config_settings'
+    ],
+    # Inherits sections
+    './deployment/haproxy/haproxy-edge-container-puppet.yaml': [
+        'service_name',
+        'config_settings'
+    ],
+    './deployment/glance/glance-api-edge-container-puppet.yaml': [
+        'service_name',
+    ],
+}
 # ansible tasks cannot be an empty dict or ansible is unhappy
 ANSIBLE_TASKS_SECTIONS = ['upgrade_tasks', 'pre_upgrade_rolling_tasks',
-                          'fast_forward_upgrade_tasks',
-                          'fast_forward_post_upgrade_tasks',
                           'post_upgrade_tasks', 'update_tasks',
                           'post_update_tasks', 'host_prep_tasks',
                           'external_deploy_tasks',
@@ -105,7 +141,6 @@ PARAMETER_DEFINITION_EXCLUSIONS = {
     'DesignateProducerLoggingSource': ['default'],
     'DesignateSinkLoggingSource': ['default'],
     'DesignateWorkerLoggingSource': ['default'],
-    'Ec2ApiLoggingSource': ['default'],
     'GlanceApiLoggingSource': ['default'],
     'GnocchiApiLoggingSource': ['default'],
     'HeatApiCfnLoggingSource': ['default'],
@@ -117,6 +152,7 @@ PARAMETER_DEFINITION_EXCLUSIONS = {
     'KeystoneAdminErrorLoggingSource': ['default'],
     'KeystoneMainAcccessLoggingSource': ['default'],
     'KeystoneMainErrorLoggingSource': ['default'],
+    'LibvirtVncCACert': ['description'],
     'NeutronApiLoggingSource': ['default'],
     'NeutronDhcpAgentLoggingSource': ['default'],
     'NeutronL3AgentLoggingSource': ['default'],
@@ -190,7 +226,6 @@ PARAMETER_DEFINITION_EXCLUSIONS = {
     }
 
 PREFERRED_CAMEL_CASE = {
-    'ec2api': 'Ec2Api',
     'haproxy': 'HAProxy',
     'metrics-qdr': 'MetricsQdr'
 }
@@ -212,15 +247,17 @@ VALIDATE_PUPPET_OVERRIDE = {
   './deployment/rabbitmq/rabbitmq-messaging-notify-pacemaker-puppet.yaml': False,
   './deployment/rabbitmq/rabbitmq-messaging-rpc-pacemaker-puppet.yaml': False,
   # qdr aliases rabbitmq service to provide alternative messaging backend
-  './puppet/services/qdr.yaml': False,
+  './deployment/qdr/qdroutered-container-puppet.yaml': False,
   # puppet/services/messaging/*.yaml provide oslo_messaging services
-  './puppet/services/messaging/rpc-qdrouterd.yaml': False,
+  './deployment/messaging/rpc-qdrouterd-container-puppet.yaml': False,
 
 }
 VALIDATE_DOCKER_OVERRIDE = {
   # deployment/rabbitmq/rabbitmq-messaging-notify-shared-puppet.yaml does not
   # deploy container
   './deployment/rabbitmq/rabbitmq-messaging-notify-shared-puppet.yaml': False,
+  # Does not follow the filename pattern
+  './deployment/multipathd/multipathd-container.yaml': True
 }
 DEPLOYMENT_RESOURCE_TYPES = [
     'OS::Heat::SoftwareDeploymentGroup',
@@ -254,6 +291,14 @@ HEAT_OUTPUTS_EXCLUSIONS = [
     './extraconfig/tasks/ssh/host_public_key.yaml',
     './extraconfig/pre_network/host_config_and_reboot.yaml'
 ]
+
+CONFIG_IMAGE_OVERRIDES = {
+    'ContainerSwiftRingbuilderConfigImage': 'ContainerSwiftConfigImage'
+}
+
+SERVICE_NAME_OVERRIDE = {
+    './deployment/rabbitmq/rabbitmq-messaging-pacemaker-puppet.yaml': 'rabbitmq',
+}
 
 
 def exit_usage():
@@ -351,6 +396,23 @@ def validate_controller_dashboard(filename, tpl):
     for role in tpl:
         if role['name'] == 'ControllerStorageDashboard':
             services = role['ServicesDefault']
+            if sorted(services) != sorted(control_role_services):
+                print('ERROR: ServicesDefault in %s is different from '
+                      'ServicesDefault in roles/Controller.yaml' % filename)
+                return 1
+    return 0
+
+
+def validate_controller_storage_nfs(filename, tpl, exclude_service=()):
+    control_role_filename = os.path.join(os.path.dirname(filename),
+                                         './Controller.yaml')
+    with open(control_role_filename, 'r') as f:
+        control_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+
+    control_role_services = control_role_tpl[0]['ServicesDefault']
+    for role in tpl:
+        if role['name'] == 'ControllerStorageNfs':
+            services = [x for x in role['ServicesDefault'] if (x not in exclude_service)]
             if sorted(services) != sorted(control_role_services):
                 print('ERROR: ServicesDefault in %s is different from '
                       'ServicesDefault in roles/Controller.yaml' % filename)
@@ -593,9 +655,12 @@ def validate_docker_service_mysql_usage(filename, tpl):
                     continue
                 newfilename = \
                     os.path.normpath(os.path.join(os.path.dirname(incfile), f))
+                if not os.path.exists(newfilename) and \
+                    os.path.exists(newfilename.replace('.yaml', '.j2.yaml')):
+                    return  # Skip for now if it's templated
                 with open(newfilename, 'r') as newfile:
                     newtmp = yaml.load(newfile.read(), Loader=yaml.SafeLoader)
-                read_all(newfile, newtmp)
+                read_all(newfilename, newtmp)
 
     read_all(filename, tpl)
     if search(all_content, match_use_mysql_protocol, no_op):
@@ -617,7 +682,7 @@ def validate_docker_service_mysql_usage(filename, tpl):
         if not search(puppet_config, match_mysqlclient, no_op):
             print("ERROR: containerized service %s uses mysql but "
                   "puppet_config section does not include "
-                  "::tripleo::profile::base::database::mysql::client"
+                  "tripleo::profile::base::database::mysql::client"
                   % filename)
             return 1
 
@@ -631,15 +696,24 @@ def validate_docker_service(filename, tpl):
                   % filename)
             return 1
         role_data = tpl['outputs']['role_data']['value']
+        if list(role_data.keys()) == ['map_merge']:
+            merged_role_data = {}
+            for part in role_data['map_merge']:
+                if list(part.keys()) == ['get_attr']:
+                    continue
+                merged_role_data.update(part)
+            role_data = merged_role_data
 
-        for section_name in REQUIRED_DOCKER_SECTIONS:
+        for section_name in REQUIRED_DOCKER_SECTIONS_OVERRIDES.get(filename, REQUIRED_DOCKER_SECTIONS):
             if section_name not in role_data:
                 # add an exception if both step_config is used in docker
                 # service, deployment/ceph-ansible/ceph-nfs.yaml uses
                 # additional step_config to add pacemaker resources
                 if (section_name == 'docker_config' and
                         role_data.get('step_config', '')):
-                    continue
+                    print('ERROR: %s appears to be a barematal-puppet service'
+                        % (filename))
+                    return 1
                 print('ERROR: %s is required in role_data for %s.'
                       % (section_name, filename))
                 return 1
@@ -690,6 +764,10 @@ def validate_docker_service(filename, tpl):
             config_volume = puppet_config.get('config_volume')
             expected_config_image_parameter = \
                 "Container%sConfigImage" % to_camel_case(config_volume)
+            expected_config_image_parameter = CONFIG_IMAGE_OVERRIDES.get(
+                expected_config_image_parameter,
+                expected_config_image_parameter
+            )
             if config_volume and expected_config_image_parameter not in tpl.get('parameters', []):
                 print('ERROR: Missing %s heat parameter for %s config_volume.'
                       % (expected_config_image_parameter, config_volume))
@@ -719,16 +797,6 @@ def validate_docker_service(filename, tpl):
             if (validate_upgrade_tasks(role_data['upgrade_tasks']) or
                 validate_upgrade_tasks_duplicate_whens(filename)):
                 print('ERROR: upgrade_tasks validation failed')
-                return 1
-
-        if 'fast_forward_upgrade_tasks' in role_data and role_data['fast_forward_upgrade_tasks']:
-            if validate_upgrade_tasks(role_data['fast_forward_upgrade_tasks']):
-                print('ERROR: fast_forward_upgrade_tasks validation failed')
-                return 1
-
-        if 'fast_forward_post_upgrade_tasks' in role_data and role_data['fast_forward_post_upgrade_tasks']:
-            if validate_upgrade_tasks(role_data['fast_forward_post_upgrade_tasks']):
-                print('ERROR: fast_forward_post_upgrade_tasks validation failed')
                 return 1
 
     if 'parameters' in tpl:
@@ -765,15 +833,17 @@ def validate_service(filename, tpl):
             print('ERROR: service_name is required in role_data for %s.'
                   % filename)
             return 1
-        # service_name must match the beginning of the file name, but with an
-        # underscore
+        # service_name must match the beginning of the file name, but with an underscore
         service_name = \
-                os.path.basename(filename).split('.')[0].replace("-", "_")
-        if not role_data['service_name'].startswith(service_name):
-            print('ERROR: service_name should match the beginning of the '
-                  'filename: %s.'
-                  % filename)
-            return 1
+                os.path.basename(filename).split('.')[0].rsplit('-', 2)[0].replace('-', '_')
+
+        if is_string(role_data['service_name']):
+            service_name = SERVICE_NAME_OVERRIDE.get(filename, service_name)
+            if not role_data['service_name'].startswith(service_name):
+                print('ERROR: service_name "%s" should match the beginning of the '
+                      'filename: %s (%s).'
+                      % (role_data['service_name'], os.path.basename(filename), service_name))
+                return 1
         # if service connects to mysql, the uri should use option
         # bind_address to avoid issues with VIP failover
         if 'config_settings' in role_data and \
@@ -784,16 +854,6 @@ def validate_service(filename, tpl):
             if (validate_upgrade_tasks(role_data['upgrade_tasks']) or
                 validate_upgrade_tasks_duplicate_whens(filename)):
                 print('ERROR: upgrade_tasks validation failed')
-                return 1
-
-        if 'fast_forward_upgrade_tasks' in role_data and role_data['fast_forward_upgrade_tasks']:
-            if validate_upgrade_tasks(role_data['fast_forward_upgrade_tasks']):
-                print('ERROR: fast_forward_upgrade_tasks validation failed')
-                return 1
-
-        if 'fast_forward_post_upgrade_tasks' in role_data and role_data['fast_forward_post_upgrade_tasks']:
-            if validate_upgrade_tasks(role_data['fast_forward_post_upgrade_tasks']):
-                print('ERROR: fast_forward_post_upgrade_tasks validation failed')
                 return 1
 
     if 'parameters' in tpl:
@@ -935,6 +995,9 @@ def validate_service_hiera_interpol(f, tpl):
             if ('tripleo::profile::base::designate::rndc_allowed_addresses' in
                     path):
                 continue
+            # Omit Neutron ml2 overlay_ip_version
+            if 'neutron::plugins::ml2::overlay_ip_version' in path:
+                continue
 
             # Omit if not a part of {get_param: [ServiceNetMap ...
             if not enter_lists and path[-1] != 'get_param':
@@ -942,12 +1005,16 @@ def validate_service_hiera_interpol(f, tpl):
             if enter_lists and path[-1] != 0 and path[-2] != 'get_param':
                 continue
 
+            # Omit if it is not a hiera config setting
+            if path[1] in ['kolla_config']:
+                continue
+
             path_str = ';'.join(str(x) for x in path)
             # NOTE(bogdando): Omit foo_network keys looking like a network
             # name. The only exception is allow anything under
             # str_replace['params'] ('str_replace;params' in the str notation).
             # We need to escape because of '$' char may be in templated params.
-            query = re.compile(r'\\;str(\\)?_replace\\;params\\;\S*?net',
+            query = re.compile(r'(\\)?;str(\\)?_replace(\\)?;params(\\)?;\S*?net',
                                re.IGNORECASE)
             if not query.search(re.escape(path_str)):
                 # Keep parsing, if foo_vip_network, or anything
@@ -959,7 +1026,7 @@ def validate_service_hiera_interpol(f, tpl):
 
             # Omit mappings in tht, like:
             # [NetXxxMap, <... ,> {get_param: [ServiceNetMap, ...
-            if re.search(r'Map.*get\\_param', re.escape(path_str)):
+            if re.search(r'Map.*get(\\)?_param', re.escape(path_str)):
                 continue
 
             # For the remaining cases, verify if there is a template
@@ -1080,18 +1147,18 @@ def validate(filename, param_map):
                 )
 
         if VALIDATE_PUPPET_OVERRIDE.get(filename, False) or (
-                filename.startswith('./puppet/services/') and
+                re.search(r'^\.\/deployment\/.+-(baremetal|pacemaker)-puppet.yaml$', filename) and
                 VALIDATE_PUPPET_OVERRIDE.get(filename, True)):
             retval |= validate_service(filename, tpl)
 
         if re.search(r'(puppet|docker)\/services', filename) or \
-                re.search(r'deployment\/', filename):
+                re.search(r'^\.\/deployment\/', filename):
             retval |= validate_service_hiera_interpol(filename, tpl)
 
-        if filename.startswith('./docker/services/logging/'):
+        if re.search(r'^\.\/deployment\/logging\/(files|stdout)\/', filename):
             retval |= validate_docker_logging_template(filename, tpl)
         elif VALIDATE_DOCKER_OVERRIDE.get(filename, False) or (
-                filename.startswith('./docker/services/') and
+                re.search(r'^\.\/deployment\/.+-container-puppet.yaml$', filename) and
                 VALIDATE_DOCKER_OVERRIDE.get(filename, True)):
             retval |= validate_docker_service(filename, tpl)
 
@@ -1102,8 +1169,17 @@ def validate(filename, param_map):
             retval = validate_role_name(filename)
 
         if filename.startswith('./roles/ComputeHCI.yaml') or \
-                filename.startswith('./roles/ComputeHCIOvsDpdk.yaml'):
+                filename.startswith('./roles/ComputeHCIOvsDpdk.yaml') or \
+                filename.startswith('./roles/ComputeHCISriov.yaml'):
             retval |= validate_hci_computehci_role(filename, tpl)
+
+        if filename.startswith('./roles/ControllerStorageNfs.yaml'):
+            exclude = [
+                'OS::TripleO::Services::CephNfs']
+            retval |= validate_controller_storage_nfs(filename, tpl, exclude)
+
+        if filename.startswith('./roles/ControllerStorageDashboard.yaml'):
+            retval |= validate_controller_dashboard(filename, tpl)
 
         if filename.startswith('./roles/ComputeOvsDpdk.yaml') or \
                 filename.startswith('./roles/ComputeSriov.yaml') or \

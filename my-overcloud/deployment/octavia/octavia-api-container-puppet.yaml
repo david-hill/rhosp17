@@ -41,6 +41,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   EnableInternalTLS:
     type: boolean
     default: false
@@ -80,17 +86,16 @@ parameters:
     default: true
     description: Configure the nova flavor for the amphora.
     type: boolean
-  NeutronMechanismDrivers:
-    default: 'ovn'
-    description: |
-        The mechanism drivers for the Neutron tenant network.
-    type: comma_delimited_list
+  OctaviaEnableDriverAgent:
+    default: true
+    description:  Set to false if the driver agent needs to be disabled for some reason.
+    type: boolean
 
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   use_tls_proxy: {equals : [{get_param: EnableInternalTLS}, true]}
-  is_ovn_in_neutron_mechanism_driver: {contains: ['ovn', {get_param: NeutronMechanismDrivers}]}
+  enable_driver_agent: {equals: [{get_param: OctaviaEnableDriverAgent}, true]}
 
 resources:
 
@@ -99,6 +104,16 @@ resources:
 
   MySQLClient:
     type: ../database/mysql-client.yaml
+
+  OctaviaProviderConfig:
+    type: ./providers/ovn-provider-config.yaml
+    properties:
+      EndpointMap: {get_param: EndpointMap}
+      ServiceData: {get_param: ServiceData}
+      ServiceNetMap: {get_param: ServiceNetMap}
+      DefaultPasswords: {get_param: DefaultPasswords}
+      RoleName: {get_param: RoleName}
+      RoleParameters: {get_param: RoleParameters}
 
   OctaviaBase:
     type: ./octavia-base.yaml
@@ -125,29 +140,43 @@ outputs:
     description: Role data for the Octavia API role.
     value:
       service_name: octavia_api
+      firewall_rules:
+        '120 octavia api':
+          dport:
+            - 9876
+            - 13876
+      keystone_resources:
+        octavia:
+          endpoints:
+            public: {get_param: [EndpointMap, OctaviaPublic, uri]}
+            internal: {get_param: [EndpointMap, OctaviaInternal, uri]}
+            admin: {get_param: [EndpointMap, OctaviaAdmin, uri]}
+          project: {get_param: OctaviaProjectName}
+          users:
+            octavia:
+              name: {get_param: OctaviaUserName}
+              password: {get_param: OctaviaPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'load-balancer'
       monitoring_subscription: {get_param: MonitoringSubscriptionOctaviaApi}
       config_settings:
         map_merge:
           - {get_attr: [OctaviaBase, role_data, config_settings]}
           - {get_attr: [OctaviaWorker, role_data, config_settings]}
+          - {get_attr: [OctaviaProviderConfig, role_data, config_settings]}
           - octavia::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri] }
-            octavia::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri] }
             octavia::policy::policies: {get_param: OctaviaApiPolicies}
             octavia::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             octavia::keystone::authtoken::project_name: {get_param: OctaviaProjectName}
             octavia::keystone::authtoken::password: {get_param: OctaviaPassword}
             octavia::keystone::authtoken::user_domain_name: 'Default'
             octavia::keystone::authtoken::project_domain_name: 'Default'
+            octavia::keystone::authtoken::region_name: {get_param: KeystoneRegion}
             octavia::worker::manage_nova_flavor: {get_param: OctaviaManageNovaFlavor}
             octavia::worker::nova_flavor_config: {get_param: OctaviaFlavorProperties}
             octavia::api::sync_db: true
             octavia::api::service_name: 'httpd'
             octavia::wsgi::apache::ssl: {get_param: EnableInternalTLS}
-            tripleo::octavia_api::firewall_rules:
-              '120 octavia api':
-                dport:
-                  - 9876
-                  - 13876
             # NOTE: bind IP is found in hiera replacing the network name with the local node IP
             # for the given network; replacement examples (eg. for internal_api):
             # internal_api -> IP
@@ -159,14 +188,12 @@ outputs:
                   "%{hiera('$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, OctaviaApiNetwork]}
-            octavia::wsgi::apache::server_name:
+            octavia::wsgi::apache::servername:
               str_replace:
                 template:
                   "%{hiera('fqdn_$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, OctaviaApiNetwork]}
-            tripleo::profile::base::octavia::api::tls_proxy_port:
-              get_param: [EndpointMap, OctaviaInternal, port]
             # Bind to localhost if internal TLS is enabled, since we put a TLS
             # proxy in front.
             octavia::api::host:
@@ -175,23 +202,22 @@ outputs:
                   "%{hiera('$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, OctaviaApiNetwork]}
-          -
-            if:
-              - is_ovn_in_neutron_mechanism_driver
-              - octavia::api::provider_drivers: 'amphora: The Octavia Amphora driver.,octavia: Deprecated alias of the Octavia Amphora driver.,ovn: Octavia OVN driver.'
-              - {}
+          - octavia::api::provider_drivers:
+              list_join:
+                - ','
+                - list_concat:
+                  - - 'amphora: The Octavia Amphora driver.'
+                    - 'octavia: Deprecated alias of the Octavia Amphora driver.'
+                  -
+                    if:
+                      - enable_driver_agent
+                      - {get_attr: [OctaviaProviderConfig, role_data, provider_driver_labels]}
+                      - []
 
       service_config_settings:
         rsyslog:
           tripleo_logging_sources_octavia_api:
             - {get_param: OctaviaApiLoggingSource}
-        keystone:
-          octavia::keystone::auth::tenant: {get_param: OctaviaProjectName}
-          octavia::keystone::auth::public_url: {get_param: [EndpointMap, OctaviaPublic, uri]}
-          octavia::keystone::auth::internal_url: { get_param: [ EndpointMap, OctaviaInternal, uri ] }
-          octavia::keystone::auth::admin_url: { get_param: [ EndpointMap, OctaviaAdmin, uri ] }
-          octavia::keystone::auth::password: {get_param: OctaviaPassword}
-          octavia::keystone::auth::region: {get_param: KeystoneRegion}
         mysql:
           octavia::db::mysql::password: {get_param: OctaviaPassword}
           octavia::db::mysql::user: {get_param: OctaviaUserName}
@@ -203,29 +229,47 @@ outputs:
       # BEGIN DOCKER SETTINGS #
       puppet_config:
         config_volume: octavia
-        puppet_tags: octavia_config
+        puppet_tags:
+          list_join:
+            - ','
+            - - octavia_config
+              - {get_attr: [OctaviaProviderConfig, role_data, puppet_tags]}
         step_config:
           list_join:
             - "\n"
             - - "include tripleo::profile::base::octavia::api"
+              - {get_attr: [OctaviaProviderConfig, role_data, step_config]}
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerOctaviaConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/octavia_api.json:
           command: /usr/sbin/httpd -DFOREGROUND
           config_files:
-            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
-              dest: "/etc/httpd/conf.d"
-              merge: false
-              preserve_properties: true
-            - source: "/var/lib/kolla/config_files/src/*"
-              dest: "/"
-              merge: true
-              preserve_properties: true
+            list_concat:
+              -
+                - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
+                  dest: "/etc/httpd/conf.d"
+                  merge: false
+                  preserve_properties: true
+                - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+                  dest: "/etc/httpd/conf.modules.d"
+                  # TODO(emilien) remove optional flag once we get a promotion
+                  # https://launchpad.net/bugs/1884115
+                  optional: true
+                  merge: false
+                  preserve_properties: true
+                - source: "/var/lib/kolla/config_files/src/*"
+                  dest: "/"
+                  merge: true
+                  preserve_properties: true
+              - {get_attr: [OctaviaProviderConfig, role_data, kolla_config_files]}
           permissions:
-            - path: /var/log/octavia
-              owner: octavia:octavia
-              recurse: true
+            list_concat:
+              -
+                - path: /var/log/octavia
+                  owner: octavia:octavia
+                  recurse: true
+              - {get_attr: [OctaviaProviderConfig, role_data, kolla_permissions]}
         /var/lib/kolla/config_files/octavia_driver_agent.json:
           command: /usr/bin/octavia-driver-agent --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/driver-agent.log --config-dir /etc/octavia/conf.d/common
           config_files:
@@ -246,6 +290,7 @@ outputs:
           config_image: {get_param: ContainerOctaviaConfigImage}
           volumes:
             - /var/lib/config-data/puppet-generated/nova/etc/nova:/etc/nova:ro
+      metadata_settings: {get_attr: [OctaviaProviderConfig, role_data, metadata_settings]}
       docker_config:
         # Kolla_bootstrap/db_sync runs before permissions set by kolla_config
         step_2:
@@ -281,6 +326,8 @@ outputs:
                   - /var/log/containers/octavia:/var/log/octavia:z
                   - /var/log/containers/httpd/octavia-api:/var/log/httpd:z
             command: "/usr/bin/bootstrap_host_exec octavia_api su octavia -s /bin/bash -c '/usr/bin/octavia-db-manage upgrade head'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           map_merge:
             - octavia_api:
@@ -297,24 +344,23 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/octavia_api.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/octavia/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/octavia:/var/lib/kolla/config_files/src:ro
                       - /var/log/containers/octavia:/var/log/octavia:z
-                      - /var/run/octavia:/var/run/octavia:shared,z
+                      - /run/octavia:/run/octavia:shared,z
                       - /var/log/containers/httpd/octavia-api:/var/log/httpd:z
-                      -
-                        if:
-                          - internal_tls_enabled
-                          - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                          - ''
-                      -
-                        if:
-                          - internal_tls_enabled
-                          - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                          - ''
+                    - if:
+                        - internal_tls_enabled
+                        - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                        - []
+                    - if:
+                        - internal_tls_enabled
+                        - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                        - []
+                    - {get_attr: [OctaviaProviderConfig, role_data, volumes]}
                 environment:
                   KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
             - if:
-                - is_ovn_in_neutron_mechanism_driver
+                - enable_driver_agent
                 - octavia_driver_agent:
                     start_order: 2
                     image: *octavia_api_image
@@ -326,9 +372,9 @@ outputs:
                         - {get_attr: [ContainersCommon, volumes]}
                         -
                           - /var/lib/kolla/config_files/octavia_driver_agent.json:/var/lib/kolla/config_files/config.json:ro
-                          - /var/lib/config-data/puppet-generated/octavia/:/var/lib/kolla/config_files/src:ro
+                          - /var/lib/config-data/puppet-generated/octavia:/var/lib/kolla/config_files/src:ro
                           - /var/log/containers/octavia:/var/log/octavia:z
-                          - /var/run/octavia:/var/run/octavia:shared,z
+                          - /run/octavia:/run/octavia:shared,z
                     environment:
                       KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
                 - {}
@@ -339,18 +385,16 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/octavia, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/octavia-api, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/octavia, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/run/octavia, 'setype': svirt_sandbox_file_t }
-        - name: octavia logs readme
+            - { 'path': /var/log/containers/octavia, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/containers/httpd/octavia-api, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /run/octavia, 'setype': container_file_t, 'mode': '0755'  }
+        - name: ensure /run/octavia is present upon reboot
           copy:
-            dest: /var/log/octavia/readme.txt
+            dest: /etc/tmpfiles.d/var-run-octavia.conf
             content: |
-              Log files from octavia containers can be found under
-              /var/log/containers/octavia and /var/log/containers/httpd/octavia-api.
-          ignore_errors: true
+              d /run/octavia 0755 root root - -
       update_tasks:
         - name: Set internal tls variable
           set_fact:
@@ -365,21 +409,27 @@ outputs:
                 name: octavia_api_tls_proxy
                 state: absent
               when: container_cli == 'docker'
-            - name: stop and disable octavia_api_tls_proxy container if podman
-              systemd:
-                name: tripleo_octavia_api_tls_proxy
-                state: stopped
-                enabled: no
-              when: container_cli == 'podman'
-            - name: clean up tripleo service file for octavia_api_tls_proxy
-              file:
-                state: absent
-                path: "/etc/systemd/system/tripleo_octavia_api_tls_proxy"
-              when: container_cli == 'podman'
-            - name: reload systemd
-              systemd:
-                daemon-reload: yes
-              when: container_cli == 'podman'
+            - name: "check if tripleo_octavia_api_tls_proxy service exists in systemd"
+              stat:
+                path: "/etc/systemd/system/tripleo_octavia_api_tls_proxy.service"
+              register: systemd_exists
+            - name: Remove tripleo_octavia_api_tls_proxy service
+              when:
+                - container_cli == 'podman'
+                - systemd_exists.stat.exists
+              block:
+                - name: stop and disable octavia_api_tls_proxy container
+                  systemd:
+                    name: tripleo_octavia_api_tls_proxy
+                    state: stopped
+                    enabled: no
+                - name: clean up tripleo service file for octavia_api_tls_proxy
+                  file:
+                    state: absent
+                    path: "/etc/systemd/system/tripleo_octavia_api_tls_proxy.service"
+                - name: reload systemd
+                  systemd:
+                    daemon-reload: yes
       upgrade_tasks:
         - name: Set internal tls variable
           set_fact:

@@ -126,6 +126,7 @@ outputs:
                 - {get_param: CephClusterName}
                 - '.conf'
             cinder::backup::swift::backup_swift_container: volumebackups
+            cinder::backup::swift::swift_catalog_info: 'object-store:swift:internalURL'
             cinder::backup::nfs::backup_share: {get_param: CinderBackupNfsShare}
             cinder::backup::nfs::backup_mount_options: {get_param: CinderBackupNfsMountOptions}
       service_config_settings:
@@ -144,7 +145,7 @@ outputs:
             - - {get_attr: [CinderBase, role_data, step_config]}
               -
                 str_replace:
-                  template: "include ::tripleo::profile::base::cinder::backup::DRIVER"
+                  template: "include tripleo::profile::base::cinder::backup::DRIVER"
                   params:
                     DRIVER: {get_param: CinderBackupBackend}
               - {get_attr: [MySQLClient, role_data, step_config]}
@@ -165,6 +166,11 @@ outputs:
               dest: "/etc/iscsi/"
               merge: true
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src-tls/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
+              optional: true
           permissions:
             - path: /var/lib/cinder
               owner: cinder:cinder
@@ -180,6 +186,10 @@ outputs:
                     USER: {get_param: CephClientUserName}
               owner: cinder:cinder
               perm: '0600'
+            - path: /etc/pki/tls/certs/etcd.crt
+              owner: cinder:cinder
+            - path: /etc/pki/tls/private/etcd.key
+              owner: cinder:cinder
       docker_config:
         step_3:
           cinder_backup_init_logs:
@@ -194,6 +204,7 @@ outputs:
         step_4:
           cinder_backup:
             image: *cinder_backup_image
+            ipc: host
             net: host
             privileged: true
             restart: always

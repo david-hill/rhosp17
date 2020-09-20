@@ -10,6 +10,14 @@ parameters:
   ContainerHAProxyConfigImage:
     description: The container image to use for the haproxy config_volume
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster.common.tag/IMAGENAME:pcmklatest'.
+    type: boolean
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -110,6 +118,7 @@ conditions:
           - true
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
 
 resources:
 
@@ -176,12 +185,15 @@ outputs:
             # disable the use CRL file until we can restart the container when the file expires
             tripleo::haproxy::crl_file: null
             tripleo::profile::pacemaker::haproxy_bundle::haproxy_docker_image: &haproxy_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: ContainerHAProxyImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              yaql:
+                data:
+                  if:
+                    - common_tag_enabled
+                    - yaql:
+                        data: {get_param: ContainerHAProxyImage}
+                        expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                    - {get_param: ContainerHAProxyImage}
+                expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: haproxy
@@ -192,7 +204,7 @@ outputs:
             - - "exec {'wait-for-settle': command => '/bin/true' }"
               - "class tripleo::firewall(){}; define tripleo::firewall::rule( $port = undef, $dport = undef, $sport = undef, $proto = undef, $action = undef, $state = undef, $source = undef, $iniface = undef, $chain = undef, $destination = undef, $extras = undef){}"
               - "['pcmk_bundle', 'pcmk_resource', 'pcmk_property', 'pcmk_constraint', 'pcmk_resource_default'].each |String $val| { noop_resource($val) }"
-              - 'include ::tripleo::profile::pacemaker::haproxy_bundle'
+              - 'include tripleo::profile::pacemaker::haproxy_bundle'
         config_image: {get_param: ContainerHAProxyConfigImage}
         volumes: &deployed_cert_mount
           yaql:
@@ -238,23 +250,8 @@ outputs:
       container_config_scripts: {get_attr: [ContainersCommon, container_config_scripts]}
       docker_config:
         step_2:
-          haproxy_restart_bundle:
-            start_order: 2
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            config_volume: haproxy
-            environment:
-              TRIPLEO_MINOR_UPDATE: ''
-            command: /pacemaker_restart_bundle.sh haproxy-bundle haproxy
-            image: {get_param: ContainerHAProxyImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/haproxy/:/var/lib/kolla/config_files/src:ro
           haproxy_init_bundle:
-            start_order: 3
+            start_order: 2
             detach: false
             net: host
             ipc: host
@@ -265,7 +262,7 @@ outputs:
                 - - '/container_puppet_apply.sh'
                   - '2'
                   - 'file,file_line,concat,augeas,pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
-                  - 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::haproxy_bundle'
+                  - 'include tripleo::profile::base::pacemaker; include tripleo::profile::pacemaker::haproxy_bundle'
                 - if:
                   - puppet_debug_enabled
                   - - '--debug'
@@ -285,24 +282,53 @@ outputs:
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
+          haproxy_restart_bundle:
+            start_order: 3
+            detach: false
+            net: host
+            ipc: host
+            user: root
+            config_volume: haproxy
+            environment:
+              TRIPLEO_MINOR_UPDATE: ''
+            command: /var/lib/container-config-scripts/pacemaker_restart_bundle.sh haproxy haproxy-bundle haproxy-bundle Started
+            image: {get_param: ContainerHAProxyImage}
+            volumes:
+              list_concat:
+                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
+                - - /var/lib/config-data/puppet-generated/haproxy:/var/lib/kolla/config_files/src:ro
       host_prep_tasks:
         - {get_attr: [HAProxyBase, role_data, host_prep_tasks]}
-        - name: haproxy logs readme
-          copy:
-            dest: /var/log/haproxy/readme.txt
-            content: |
-              Log files from the haproxy containers can be found under
-              /var/log/containers/haproxy.
-          ignore_errors: true
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/haproxy, 'setype': var_log_t }
-            - { 'path': /var/lib/haproxy, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/haproxy, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/containers/haproxy, 'setype': var_log_t, 'mode': '0750' }
+            - { 'path': /var/lib/haproxy, 'setype': container_file_t }
+            - { 'path': /var/log/haproxy, 'setype': container_file_t }
+        - name: Run puppet on the host to apply IPtables rules
+          no_log: true
+          shell: |
+            puppet apply {{ (puppet_debug|bool) | ternary('--debug --verbose', '') }} --detailed-exitcodes --summarize --color=false \
+                --modulepath '{{ puppet_modulepath }}' --tags '{{ puppet_tags }}' -e '{{ puppet_execute }}'
+          register: puppet_host_outputs
+          changed_when: puppet_host_outputs.rc == 2
+          failed_when: false
+          vars:
+            puppet_execute: "if hiera('enable_load_balancer', true) { class {'::tripleo::haproxy': use_internal_certificates => false, manage_firewall => hiera('tripleo::firewall::manage_firewall', true), }}"
+            puppet_tags: tripleo::firewall::rule
+            puppet_modulepath: /etc/puppet/modules:/opt/stack/puppet-modules:/usr/share/openstack-puppet/modules
+            puppet_debug: {get_param: ConfigDebug}
+        - name: "Debug output for task: Run puppet on the host to apply IPtables rules"
+          debug:
+            var: puppet_host_outputs.stdout_lines | default([]) | union(puppet_host_outputs.stderr_lines | default([]))
+          when:
+            - not (ansible_check_mode | bool)
+            - puppet_host_outputs.rc is defined
+          failed_when: puppet_host_outputs.rc not in [0, 2]
       metadata_settings:
         {get_attr: [HAProxyBase, role_data, metadata_settings]}
       deploy_steps_tasks:
@@ -334,38 +360,29 @@ outputs:
         - name: HAproxy tag container image for pacemaker
           when: step|int == 1
           import_role:
-            name: tripleo-container-tag
+            name: tripleo_container_tag
           vars:
             container_image: {get_param: ContainerHAProxyImage}
             container_image_latest: *haproxy_image_pcmklatest
-        - name: Run puppet on the host to apply IPtables rules
-          when: step|int == 2
-          shell: |
-            set +e
-            puppet apply {{ puppet_debug }} --detailed-exitcodes --summarize --color=false \
-                --modulepath '{{ puppet_modulepath }}' --tags '{{ puppet_tags }}' -e '{{ puppet_execute }}'
-            rc=$?
-            set -e
-            set +ux
-            if [ $rc -eq 2 -o $rc -eq 0 ]; then
-                exit 0
-            fi
-            exit $rc
-          vars:
-            puppet_execute: include ::tripleo::profile::base::haproxy
-            puppet_tags: tripleo::firewall::rule
-            puppet_modulepath: /etc/puppet/modules:/opt/stack/puppet-modules:/usr/share/openstack-puppet/modules
-            puppet_debug:
-              if:
-                - puppet_debug_enabled
-                - '--debug --verbose'
-                - ''
       update_tasks:
+        - name: Tear-down non-HA haproxy container
+          when:
+            - step|int == 1
+          block: &haproxy_teardown_nonha
+            - name: Remove non-HA haproxy container
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_container_cli: "{{ container_cli }}"
+                tripleo_containers_to_rm:
+                  - haproxy
         - name: Set HAProxy upgrade facts
           block: &haproxy_update_upgrade_facts
           - name: set is_haproxy_bootstrap_node fact
             tags: common
             set_fact: is_haproxy_bootstrap_node={{haproxy_short_bootstrap_node_name|lower == ansible_hostname|lower}}
+            when:
+              - haproxy_short_bootstrap_node_name|default(false)
         - name: Mount TLS cert if needed
           when:
             - step|int == 1
@@ -373,7 +390,7 @@ outputs:
           block:
             - name: Check haproxy public certificate configuration in pacemaker
               command: cibadmin --query --xpath "//storage-mapping[@id='haproxy-cert']"
-              ignore_errors: true
+              failed_when: false
               register: haproxy_cert_mounted
             - name: Disable the haproxy cluster resource
               pacemaker_resource:
@@ -420,27 +437,18 @@ outputs:
               register: new_haproxy_image_id
             - name: Retag pcmklatest to latest haproxy image
               include_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{haproxy_image}}"
                 container_image_latest: "{{haproxy_image_latest}}"
               when:
                 - old_haproxy_image_id.stdout != new_haproxy_image_id.stdout
-            - block:
-                - name: Get a list of container using haproxy image
-                  shell: "{{container_cli}} ps -a -q -f 'ancestor={{old_haproxy_image_id.stdout}}'"
-                  register: haproxy_containers_to_destroy
-                # It will be recreated with the delpoy step.
-                - name: Remove any container using the same haproxy image
-                  shell: "{{container_cli}} rm -fv {{item}}"
-                  with_items: "{{ haproxy_containers_to_destroy.stdout_lines }}"
-                - name: Remove previous haproxy images
-                  shell: "{{container_cli}} rmi -f {{old_haproxy_image_id.stdout}}"
-              when:
-                - old_haproxy_image_id.stdout != ''
-                - old_haproxy_image_id.stdout != new_haproxy_image_id.stdout
 
       upgrade_tasks:
+        - name: Tear-down non-HA haproxy container
+          when:
+            - step|int == 0
+          block: *haproxy_teardown_nonha
         - name: Prepare switch of haproxy image name
           when:
             - step|int == 0
@@ -455,7 +463,7 @@ outputs:
                 haproxy_image_current: "{{haproxy_image_current_res.stdout}}"
             - name: Temporarily tag the current haproxy image id with the upgraded image name
               import_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{haproxy_image_current}}"
                 container_image_latest: "{{haproxy_image_latest}}"
@@ -497,11 +505,11 @@ outputs:
               block:
                 - name: Check haproxy stats socket configuration in pacemaker
                   command: cibadmin --query --xpath "//storage-mapping[@id='haproxy-var-lib']"
-                  ignore_errors: true
+                  failed_when: false
                   register: haproxy_stats_exposed
                 - name: Check haproxy public certificate configuration in pacemaker
                   command: cibadmin --query --xpath "//storage-mapping[@id='haproxy-cert']"
-                  ignore_errors: true
+                  failed_when: false
                   register: haproxy_cert_mounted
                 - name: Add a bind mount for stats socket in the haproxy bundle
                   command: pcs resource bundle update haproxy-bundle storage-map add id=haproxy-var-lib source-dir=/var/lib/haproxy target-dir=/var/lib/haproxy options=rw
@@ -529,6 +537,7 @@ outputs:
         - name: Create hiera data to upgrade haproxy in a stepwise manner.
           when:
             - step|int == 1
+            - cluster_recreate|bool
           block:
             - name: set haproxy upgrade node facts in a single-node environment
               set_fact:
@@ -541,11 +550,8 @@ outputs:
                 cacheable: no
               when:
                 - groups['haproxy'] | length > 1
-                - item.split('.')[0] in ansible_limit.split(',')
-              loop: "{{ haproxy_short_node_names }}"
-
-            - debug:
-                msg: "Prepare haproxy upgrade for {{ haproxy_short_node_names_upgraded }}"
+                - item.split('.')[0] in ansible_limit.split(':')
+              loop: "{{ haproxy_short_node_names | default([]) }}"
             - fail:
                 msg: >
                   You can't upgrade haproxy without staged
@@ -554,23 +560,26 @@ outputs:
               when: >-
                 haproxy_short_node_names_upgraded is not defined or
                 haproxy_short_node_names_upgraded | length == 0
-
+            - debug:
+                msg: "Prepare haproxy upgrade for {{ haproxy_short_node_names_upgraded }}"
             - name: remove haproxy init container on upgrade-scaleup to force re-init
-              shell: |
-                if podman inspect haproxy_init_bundle &> /dev/null; then
-                    podman rm haproxy_init_bundle
-                fi
-              when: haproxy_short_node_names_upgraded | length > 1
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_containers_to_rm:
+                  - haproxy_init_bundle
+              when:
+                - haproxy_short_node_names_upgraded | length > 1
             - name: add the haproxy short name to hiera data for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: set.yml
               vars:
                 tripleo_upgrade_key: haproxy_short_node_names_override
                 tripleo_upgrade_value: "{{haproxy_short_node_names_upgraded}}"
             - name: remove the extra hiera data needed for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: remove.yml
               vars:
                 tripleo_upgrade_key: haproxy_short_node_names_override

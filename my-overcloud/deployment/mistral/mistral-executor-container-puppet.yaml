@@ -127,7 +127,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::mistral::executor
+            - - include tripleo::profile::base::mistral::executor
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerMistralConfigImage}
         volumes:
@@ -135,7 +135,7 @@ outputs:
             -
               if:
                 - docker_enabled
-                - - /var/run/docker.sock:/var/run/docker.sock:rw
+                - - /run/docker.sock:/run/docker.sock:rw
                 - null
       kolla_config:
         /var/lib/kolla/config_files/mistral_executor.json:
@@ -167,8 +167,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/mistral_executor.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/mistral/:/var/lib/kolla/config_files/src:ro
-                  - /run:/run
+                  - /var/lib/config-data/puppet-generated/mistral:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/mistral:/var/log/mistral:z
                   - /var/lib/mistral:/var/lib/mistral:z
                   - /usr/share/ansible/:/usr/share/ansible/:ro
@@ -209,7 +208,7 @@ outputs:
             tripleo_admin_user: {get_param: TripleoAdminUser}
             undercloud_cfg_file: {get_param: UndercloudConfigFilePath}
         - import_role:
-            name: tripleo-create-admin
+            name: tripleo_create_admin
             tasks_from: create_user.yml
           vars:
             tripleo_admin_generate_key: true
@@ -218,10 +217,10 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/mistral, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/mistral, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/mistral, 'setype': svirt_sandbox_file_t }
+            - { 'path': /var/log/containers/mistral, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/mistral, 'setype': container_file_t, 'mode': '0751' }
         - name: create mistral/.ssh directory
           file:
             path: /var/lib/mistral/.ssh
@@ -239,25 +238,18 @@ outputs:
             src: "{{ undercloud_cfg_file }}"
             dest: /var/lib/mistral/undercloud.conf
             mode: 0444
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
             local_follow: true
-        - name: mistral logs readme
-          copy:
-            dest: /var/log/mistral/readme.txt
-            content: |
-              Log files from mistral containers can be found under
-              /var/log/containers/mistral.
-          ignore_errors: true
         - name: create ceph-ansible source directory
           file:
             path: /usr/share/ceph-ansible
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: create octavia-amphora-images directory
           file:
             path: /usr/share/openstack-octavia-amphora-images
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink

@@ -62,12 +62,22 @@ outputs:
     value:
       service_name: certmonger_user
       config_settings:
-        if:
-          - internal_tls_enabled
-          - tripleo::certmonger::ca::crl::crl_source: {get_param: DefaultCRLURL}
-            certmonger_ca: {get_param: CertmongerCA}
-            certmonger_ca_vnc: {get_param: CertmongerVncCA}
-            certmonger_ca_qemu: {get_param: CertmongerQemuCA}
-          - {}
+        map_merge:
+          - certmonger_ca: {get_param: CertmongerCA}
+          - if:
+            - internal_tls_enabled
+            - tripleo::certmonger::ca::crl::crl_source: {get_param: DefaultCRLURL}
+              certmonger_ca_vnc: {get_param: CertmongerVncCA}
+              certmonger_ca_qemu: {get_param: CertmongerQemuCA}
+            - {}
       step_config: |
-        include ::tripleo::profile::base::certmonger_user
+        include tripleo::profile::base::certmonger_user
+      host_prep_tasks:
+        - name: create certificate rotation script for HA services
+          copy:
+            dest: /usr/bin/certmonger-ha-resource-refresh.sh
+            setype: certmonger_unconfined_exec_t
+            mode: "0700"
+            content: |
+              #!/bin/bash
+              /var/lib/container-config-scripts/pacemaker_mutex_restart_bundle.sh --lock $* 2>&1 | logger -t certmonger

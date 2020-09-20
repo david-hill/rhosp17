@@ -49,11 +49,16 @@
     - OS::TripleO::Services::CephOSD
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::CinderApi
+    - OS::TripleO::Services::CinderBackendDellEMCPowerFlex
+    - OS::TripleO::Services::CinderBackendDellEMCPowermax
+    - OS::TripleO::Services::CinderBackendDellEMCPowerStore
+    - OS::TripleO::Services::CinderBackendDellEMCSc
     - OS::TripleO::Services::CinderBackendDellEMCUnity
     - OS::TripleO::Services::CinderBackendDellEMCVMAXISCSI
     - OS::TripleO::Services::CinderBackendDellEMCVNX
+    - OS::TripleO::Services::CinderBackendDellEMCVxFlexOS
+    - OS::TripleO::Services::CinderBackendDellEMCXtremio
     - OS::TripleO::Services::CinderBackendDellEMCXTREMIOISCSI
-    - OS::TripleO::Services::CinderBackendDellPs
     - OS::TripleO::Services::CinderBackendDellSc
     - OS::TripleO::Services::CinderBackendNVMeOF
     - OS::TripleO::Services::CinderBackendPure
@@ -75,9 +80,7 @@
     - OS::TripleO::Services::DesignateProducer
     - OS::TripleO::Services::DesignateSink
     - OS::TripleO::Services::DesignateWorker
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::DockerRegistry
-    - OS::TripleO::Services::Ec2Api
     - OS::TripleO::Services::Etcd
     - OS::TripleO::Services::ExternalSwiftProxy
     - OS::TripleO::Services::GlanceApi
@@ -98,7 +101,6 @@
     - OS::TripleO::Services::IronicNeutronAgent
     - OS::TripleO::Services::IronicPxe
     - OS::TripleO::Services::Iscsid
-    - OS::TripleO::Services::Keepalived
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::Keystone
     - OS::TripleO::Services::LoginDefs
@@ -130,8 +132,6 @@
     - OS::TripleO::Services::NeutronL2gwApi
     - OS::TripleO::Services::NeutronL3Agent
     - OS::TripleO::Services::NeutronLinuxbridgeAgent
-    - OS::TripleO::Services::NeutronML2FujitsuCfab
-    - OS::TripleO::Services::NeutronML2FujitsuFossw
     - OS::TripleO::Services::NeutronMetadataAgent
     - OS::TripleO::Services::NeutronOvsAgent
     - OS::TripleO::Services::NeutronSfcApi
@@ -159,6 +159,7 @@
     - OS::TripleO::Services::Pacemaker
     - OS::TripleO::Services::PlacementApi
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Redis
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog

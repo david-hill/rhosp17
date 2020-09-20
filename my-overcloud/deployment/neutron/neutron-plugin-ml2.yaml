@@ -45,7 +45,7 @@ parameters:
     default: 'datacentre'
     description: If set, flat networks to configure in neutron plugins.
   NeutronPluginExtensions:
-    default: "qos,port_security"
+    default: "qos,port_security,dns"
     description: |
         Comma-separated list of extensions enabled for the Neutron plugin.
     type: comma_delimited_list
@@ -72,10 +72,6 @@ parameters:
     default: 'geneve'
     description: The tenant network type for Neutron.
     type: comma_delimited_list
-  NeutronFirewallDriver:
-    description: Firewall driver for realizing neutron security group function
-    type: string
-    default: 'iptables_hybrid'
   NeutronOverlayIPVersion:
     default: 4
     description: IP version used for all overlay network endpoints.
@@ -91,6 +87,36 @@ parameters:
         value in ML2 plugin. And overwrite values from global_physnet_mtu for
         selected network.
     type: comma_delimited_list
+  NeutronOvsVnicTypeBlacklist:
+    description: |
+        Comma-separated list of VNIC types for which support in Neutron is
+        administratively prohibited by the OVS mechanism driver.
+    type: comma_delimited_list
+    default: ""
+  NeutronSriovVnicTypeBlacklist:
+    description: >
+        Comma-separated list of VNIC types for which support in Neutron is
+        administratively prohibited by the SR-IOV mechanism driver.
+    type: comma_delimited_list
+    default: ""
+  # DEPRECATED: the NeutronFirewallDriver option is deprecated and is currently
+  # maintained for backwards compatibility. It has no any effect on the
+  # deployment and will be removed in the W release.
+  # Please use NeutronOVSFirewallDriver to configure driver in the ovs agent.
+  NeutronFirewallDriver:
+    description: Firewall driver for realizing neutron security group function
+    type: string
+    default: ''
+
+parameter_groups:
+- label: deprecated
+  description: |
+   The following parameters are deprecated and will be removed. They should not
+   be relied on for new deployments. If you have concerns regarding deprecated
+   parameters, please contact the TripleO development team on IRC or the
+   OpenStack mailing list.
+  parameters:
+  - NeutronOverlayIPVersion
 
 conditions:
   physical_network_mtus_set: {not: {equals: [{get_param: NeutronML2PhysicalNetworkMtus}, []]}}
@@ -123,15 +149,20 @@ outputs:
             neutron::plugins::ml2::tunnel_id_ranges: {get_param: NeutronTunnelIdRanges}
             neutron::plugins::ml2::vni_ranges: {get_param: NeutronVniRanges}
             neutron::plugins::ml2::tenant_network_types: {get_param: NeutronNetworkType}
-            neutron::plugins::ml2::firewall_driver: {get_param: NeutronFirewallDriver}
-            neutron::plugins::ml2::overlay_ip_version: {get_param: NeutronOverlayIPVersion}
+            neutron::plugins::ml2::ovs_driver::vnic_type_blacklist: {get_param: NeutronOvsVnicTypeBlacklist}
+            neutron::plugins::ml2::sriov_driver::vnic_type_blacklist: {get_param: NeutronSriovVnicTypeBlacklist}
+            neutron::plugins::ml2::overlay_ip_version:
+              get_param:
+                - ServiceData
+                - net_ip_version_map
+                - {get_param: [ServiceNetMap, NeutronTenantNetwork]}
           - if:
             - physical_network_mtus_set
             - neutron::plugins::ml2::physical_network_mtus: {get_param: NeutronML2PhysicalNetworkMtus}
             - null
 
       step_config: |
-        include ::tripleo::profile::base::neutron::plugins::ml2
+        include tripleo::profile::base::neutron::plugins::ml2
       service_config_settings:
         horizon:
           neutron::plugins::ml2::mechanism_drivers: {get_param: NeutronMechanismDrivers}

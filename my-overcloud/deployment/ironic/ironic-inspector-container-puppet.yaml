@@ -36,6 +36,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   IPAImageURLs:
     default: []
     description: IPA image URLs, the format should be ["http://path/to/kernel", "http://path/to/ramdisk"]
@@ -51,6 +57,11 @@ parameters:
     default: false
     description: Set to True to enable debugging on all services.
     type: boolean
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   IronicInspectorDiscoveryDefaultDriver:
     default: 'ipmi'
     description: |
@@ -71,7 +82,7 @@ parameters:
     description: Comma-separated list of IPA inspection collectors
     type: string
   IronicInspectorExtraProcessingHooks:
-    default: extra_hardware,lldp_basic,local_link_connection
+    default: extra_hardware,lldp_basic,local_link_connection,physnet_cidr_map
     description: |
         Comma-separated list of processing hooks to append to the default list.
     type: string
@@ -153,6 +164,17 @@ parameters:
     default: []
     description: List of additional architectures to enable.
     type: comma_delimited_list
+  PortPhysnetCidrMap:
+    default: {}
+    description: |
+      Mapping of IP subnet CIDR to physical network. When the physnet_cidr_map
+      processing hook is enabled the physical_network property of baremetal
+      ports is populated based on this mapping.
+      Example:
+             PortPhysnetCidrMap:
+               '10.10.10.0/24': 'physnet_a'
+               '2001:db8::/64': 'physnet_b'
+    type: json
 
 conditions:
   enable_ipxe: {equals : [{get_param: IronicInspectorIPXEEnabled}, true]}
@@ -161,6 +183,7 @@ conditions:
   ironic_inspection_subnets_not_set: {equals : [{get_param: IronicInspectorSubnets}, {}]}
   enable_architecture_ppc64le: {contains: ['ppc64le', {get_param: AdditionalArchitectures}]}
   ipa_images: {not: {equals: [{get_param: IPAImageURLs}, []]}}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
 
@@ -175,6 +198,48 @@ outputs:
     description: Role data for the Ironic Inspector role.
     value:
       service_name: ironic_inspector
+      firewall_rules:
+        '137 ironic-inspector':
+          dport:
+            - 5050
+        '137 ironic-inspector dhcp input':
+          iniface: {get_param: IronicInspectorInterface}
+          ipversion: 'ipv4'
+          proto: 'udp'
+          chain: 'INPUT'
+          dport: 67
+        '137 ironic-inspector dhcp output':
+          ipversion: 'ipv4'
+          proto: 'udp'
+          chain: 'OUTPUT'
+          dport: 68
+        '137 ironic-inspector dhcpv6 input':
+          iniface: {get_param: IronicInspectorInterface}
+          ipversion: 'ipv6'
+          proto: 'udp'
+          chain: 'INPUT'
+          dport: 547
+        '137 ironic-inspector dhcpv6 output':
+          ipversion: 'ipv6'
+          proto: 'udp'
+          chain: 'OUTPUT'
+          dport: 546
+        '137 ironic-inspector dhcpv6 relay output':
+          ipversion: 'ipv6'
+          proto: 'udp'
+          chain: 'OUTPUT'
+          dport: 547
+      keystone_resources:
+        ironic-inspector:
+          endpoints:
+            public: {get_param: [EndpointMap, IronicInspectorPublic, uri]}
+            internal: {get_param: [EndpointMap, IronicInspectorInternal, uri]}
+            admin: {get_param: [EndpointMap, IronicInspectorAdmin, uri]}
+          users:
+            ironic-inspector:
+              password: {get_param: IronicPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'baremetal-introspection'
       monitoring_subscription: {get_param: MonitoringSubscriptionIronicInspector}
       config_settings:
         map_merge:
@@ -208,55 +273,27 @@ outputs:
             ironic::inspector::authtoken::project_name: 'service'
             ironic::inspector::authtoken::user_domain_name: 'Default'
             ironic::inspector::authtoken::project_domain_name: 'Default'
+            ironic::inspector::authtoken::region_name: {get_param: KeystoneRegion}
             ironic::inspector::cors::allowed_origin: '*'
             ironic::inspector::cors::max_age: 3600
             ironic::inspector::cors::allow_methods: 'GET,POST,PUT,DELETE,OPTIONS,PATCH'
             ironic::inspector::cors::allow_headers: 'Content-Type,Cache-Control,Content-Language,Expires,Last-Modified,Pragma,X-Auth-Token'
             ironic::inspector::cors::expose_headers: 'Content-Type,Cache-Control,Content-Language,Expires,Last-Modified,Pragma'
-            tripleo::ironic_inspector::firewall_rules:
-              '137 ironic-inspector':
-                dport:
-                  - 5050
-              '137 ironic-inspector dhcp input':
-                iniface: {get_param: IronicInspectorInterface}
-                ipversion: 'ipv4'
-                proto: 'udp'
-                chain: 'INPUT'
-                dport: 67
-              '137 ironic-inspector dhcp output':
-                ipversion: 'ipv4'
-                proto: 'udp'
-                chain: 'OUTPUT'
-                dport: 68
-              '137 ironic-inspector dhcpv6 input':
-                iniface: {get_param: IronicInspectorInterface}
-                ipversion: 'ipv6'
-                proto: 'udp'
-                chain: 'INPUT'
-                dport: 547
-              '137 ironic-inspector dhcpv6 output':
-                ipversion: 'ipv6'
-                proto: 'udp'
-                chain: 'OUTPUT'
-                dport: 546
-              '137 ironic-inspector dhcpv6 relay output':
-                ipversion: 'ipv6'
-                proto: 'udp'
-                chain: 'OUTPUT'
-                dport: 547
-            ironic::inspector::ironic_username: 'ironic'
-            ironic::inspector::ironic_password: {get_param: IronicPassword}
-            ironic::inspector::ironic_tenant_name: 'service'
-            ironic::inspector::ironic_auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::inspector::ipxe_timeout: 60
-            ironic::inspector::ironic_max_retries: 6
-            ironic::inspector::ironic_retry_interval: 10
-            ironic::inspector::ironic_user_domain_name: 'Default'
-            ironic::inspector::ironic_project_domain_name: 'Default'
+            ironic::inspector::ironic::username: 'ironic'
+            ironic::inspector::ironic::password: {get_param: IronicPassword}
+            ironic::inspector::ironic::project_name: 'service'
+            ironic::inspector::ironic::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            ironic::inspector::ironic::max_retries: 6
+            ironic::inspector::ironic::retry_interval: 10
+            ironic::inspector::ironic::user_domain_name: 'Default'
+            ironic::inspector::ironic::project_domain_name: 'Default'
+            ironic::inspector::ironic::region_name: {get_param: KeystoneRegion}
             ironic::inspector::http_port: {get_param: IronicIPXEPort}
             ironic::inspector::additional_processing_hooks: {get_param: IronicInspectorExtraProcessingHooks}
             ironic::inspector::ramdisk_collectors: {get_param: IronicInspectorCollectors}
             ironic::inspector::ramdisk_kernel_args: {get_param: IronicInspectorKernelArgs}
+            ironic::inspector::port_physnet_cidr_map: {get_param: PortPhysnetCidrMap}
             ironic::inspector::db::database_connection:
               make_url:
                 scheme: {get_param: [EndpointMap, MysqlInternal, protocol]}
@@ -265,8 +302,18 @@ outputs:
                 host: {get_param: [EndpointMap, MysqlInternal, host]}
                 path: /ironic-inspector
                 query:
-                  read_default_file: /etc/my.cnf.d/tripleo.cnf
-                  read_default_group: tripleo
+                  if:
+                    - enable_sqlalchemy_collectd
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+                        plugin: collectd
+                        collectd_program_name: ironic_inspector
+                        collectd_host: localhost
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+
           -
             if:
             - enable_architecture_ppc64le
@@ -281,12 +328,13 @@ outputs:
             if:
             - use_swift
             - ironic::inspector::store_data: 'swift'
-              ironic::inspector::swift_username: 'ironic'
-              ironic::inspector::swift_password: {get_param: IronicPassword}
-              ironic::inspector::swift_tenant_name: 'service'
-              ironic::inspector::swift_auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-              ironic::inspector::swift_user_domain_name: 'Default'
-              ironic::inspector::swift_project_domain_name: 'Default'
+              ironic::inspector::swift::username: 'ironic'
+              ironic::inspector::swift::password: {get_param: IronicPassword}
+              ironic::inspector::swift::project_name: 'service'
+              ironic::inspector::swift::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+              ironic::inspector::swift::user_domain_name: 'Default'
+              ironic::inspector::swift::project_domain_name: 'Default'
+              ironic::inspector::swift::region_name: {get_param: KeystoneRegion}
             - {}
           -
             if:
@@ -298,13 +346,6 @@ outputs:
           - ironic::inspector::tftp_root: /var/lib/ironic/tftpboot
           - ironic::inspector::http_root: /var/lib/ironic/httpboot
       service_config_settings:
-        keystone:
-          ironic::keystone::auth_inspector::tenant: 'service'
-          ironic::keystone::auth_inspector::public_url: {get_param: [EndpointMap, IronicInspectorPublic, uri]}
-          ironic::keystone::auth_inspector::internal_url: {get_param: [EndpointMap, IronicInspectorInternal, uri]}
-          ironic::keystone::auth_inspector::admin_url: {get_param: [EndpointMap, IronicInspectorAdmin, uri]}
-          ironic::keystone::auth_inspector::password: {get_param: IronicPassword}
-          ironic::keystone::auth_inspector::region: {get_param: KeystoneRegion}
         mysql:
           ironic::inspector::db::mysql::password: {get_param: IronicPassword}
           ironic::inspector::db::mysql::user: ironic-inspector
@@ -320,7 +361,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::ironic_inspector
+            - - include tripleo::profile::base::ironic_inspector
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerIronicInspectorConfigImage}
         volumes:
@@ -391,6 +432,7 @@ outputs:
                   - /var/log/containers/ironic-inspector:/var/log/ironic-inspector:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
             command: "/usr/bin/bootstrap_host_exec ironic_inspector su ironic-inspector -s /bin/bash -c 'ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf upgrade'"
           ironic_inspector_get_ipa:
             start_order: 2
@@ -431,7 +473,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ironic_inspector.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ironic_inspector/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ironic_inspector:/var/lib/kolla/config_files/src:ro
                   - /var/lib/ironic:/var/lib/ironic:shared,z
                   - /var/log/containers/ironic-inspector:/var/log/ironic-inspector:z
                   - /var/lib/ironic-inspector/dhcp-hostsdir:/var/lib/ironic-inspector/dhcp-hostsdir:shared,z
@@ -451,7 +493,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ironic_inspector_dnsmasq.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ironic_inspector/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ironic_inspector:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/ironic-inspector:/var/log/ironic-inspector:z
                   - /var/lib/ironic-inspector/dhcp-hostsdir:/var/lib/ironic-inspector/dhcp-hostsdir:shared,z
             environment:
@@ -462,18 +504,26 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/ironic-inspector, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ironic-inspector, 'setype': svirt_sandbox_file_t }
-        - name: ironic-inspector logs readme
-          copy:
-            dest: /var/log/ironic-inspector/readme.txt
-            content: |
-              Log files from ironic-inspector container can be found under
-              /var/log/containers/ironic-inspector.
-          ignore_errors: true
+            - { 'path': /var/log/containers/ironic-inspector, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/ironic-inspector/dhcp-hostsdir, 'setype': container_file_t }
         - name: create persistent ironic-inspector dnsmasq dhcp hostsdir
           file:
             path: /var/lib/ironic-inspector/dhcp-hostsdir
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
+        # TODO(emilien): remove the cleanup tasks after Ussuri
+        # https://bugs.launchpad.net/tripleo/+bug/1868934
+        - name: Cleanup unnecessary container config-data
+          block: &ironic_config_data_cleanup
+            - name: Remove /var/lib/config-data/puppet-generated/ironic_inspector/var
+              file:
+                path: /var/lib/config-data/puppet-generated/ironic_inspector/var
+                state: absent
+      upgrade_tasks:
+        - name: Cleanup unnecessary container config-data
+          when:
+            - step|int == 0
+          tags: common
+          block: *ironic_config_data_cleanup
