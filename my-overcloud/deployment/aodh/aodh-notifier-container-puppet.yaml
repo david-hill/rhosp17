@@ -103,7 +103,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/aodh_notifier.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/aodh/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/aodh:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/aodh:/var/log/aodh:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -113,16 +113,10 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/aodh, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/aodh, 'setype': svirt_sandbox_file_t }
-        - name: aodh logs readme
-          copy:
-            dest: /var/log/aodh/readme.txt
-            content: |
-              Log files from aodh containers can be found under
-              /var/log/containers/aodh and /var/log/containers/httpd/aodh-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/aodh, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/aodh, 'setype': container_file_t }
       external_upgrade_tasks:
         - when:
             - step|int == 1
@@ -133,26 +127,8 @@ outputs:
           block:
             - name: Stop aodh notifier container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - aodh_notifier
                 tripleo_delegate_to: "{{ groups['aodh_notifier'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-aodh-notifier is deployed
-              command: systemctl is-enabled --quiet openstack-aodh-notifier
-              ignore_errors: True
-              register: aodh_notifier_enabled_result
-            - name: Set fact aodh_notifier_enabled
-              set_fact:
-                aodh_notifier_enabled: "{{ aodh_notifier_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-aodh-notifier service
-          service: name=openstack-aodh-notifier state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - aodh_notifier_enabled|bool

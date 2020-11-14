@@ -10,6 +10,20 @@ parameters:
   ContainerRabbitmqConfigImage:
     description: The container image to use for the rabbitmq config_volume
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster.common.tag/IMAGENAME:pcmklatest'.
+    type: boolean
+  ClusterFullTag:
+    default: false
+    description: When set to true, the pacemaker service uses a fully
+                 constant tag for its container image name, e.g.
+                 'cluster.common.tag/SERVICENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -60,6 +74,13 @@ parameters:
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
+  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
+  rabbit_cookie_param_set:
+    not:
+      equals:
+      - {get_param: RabbitCookie}
+      - ''
 
 resources:
 
@@ -81,27 +102,34 @@ outputs:
     description: Role data for the Rabbitmq API role.
     value:
       service_name: rabbitmq
+      firewall_rules:
+        '109 rabbitmq-bundle':
+          dport:
+            - 3122
+            - 4369
+            - 5672
+            - 25672
+            - 25673-25683
       monitoring_subscription: {get_attr: [RabbitMQServiceBase, role_data, monitoring_subscription]}
       config_settings:
         map_merge:
           - get_attr: [RabbitMQServiceBase, role_data, config_settings]
           - rabbitmq::service_manage: false
             tripleo::profile::pacemaker::rabbitmq_bundle::rabbitmq_docker_image: &rabbitmq_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: ContainerRabbitmqImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              if:
+                - common_tag_full
+                - "cluster.common.tag/rabbitmq:pcmklatest"
+                - yaql:
+                    data:
+                      if:
+                        - common_tag_enabled
+                        - yaql:
+                            data: {get_param: ContainerRabbitmqImage}
+                            expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                        - {get_param: ContainerRabbitmqImage}
+                    expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::rabbitmq_bundle::control_port: 3122
             tripleo::profile::pacemaker::rabbitmq_bundle::container_backend: {get_param: ContainerCli}
-            tripleo::rabbitmq::firewall_rules:
-              '109 rabbitmq-bundle':
-                dport:
-                  - 3122
-                  - 4369
-                  - 5672
-                  - 25672
       service_config_settings: {get_attr: [RabbitmqBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS
       puppet_config:
@@ -111,7 +139,7 @@ outputs:
           list_join:
             - "\n"
             - - "['Rabbitmq_policy', 'Rabbitmq_user'].each |String $val| { noop_resource($val) }"
-              - "include ::tripleo::profile::pacemaker::rabbitmq_bundle"
+              - "include tripleo::profile::pacemaker::rabbitmq_bundle"
         config_image: {get_param: ContainerRabbitmqConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/rabbitmq.json:
@@ -161,7 +189,7 @@ outputs:
             privileged: false
             volumes:
               - /var/lib/kolla/config_files/rabbitmq.json:/var/lib/kolla/config_files/config.json:ro
-              - /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro
+              - /var/lib/config-data/puppet-generated/rabbitmq:/var/lib/kolla/config_files/src:ro
               - /etc/hosts:/etc/hosts:ro
               - /etc/localtime:/etc/localtime:ro
               - /var/lib/rabbitmq:/var/lib/rabbitmq:z
@@ -170,31 +198,15 @@ outputs:
               KOLLA_BOOTSTRAP: true
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
               RABBITMQ_CLUSTER_COOKIE:
-                yaql:
-                  expression: $.data.passwords.where($ != '').first()
-                  data:
-                    passwords:
-                      - {get_param: RabbitCookie}
-                      - {get_param: [DefaultPasswords, rabbit_cookie]}
+                if:
+                  - rabbit_cookie_param_set
+                  - {get_param: RabbitCookie}
+                  - {get_param: [DefaultPasswords, rabbit_cookie]}
         step_2:
-          rabbitmq_restart_bundle:
+          rabbitmq_wait_bundle:
             start_order: 0
-            config_volume: rabbitmq
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            environment:
-              TRIPLEO_MINOR_UPDATE: ''
-            command: /pacemaker_restart_bundle.sh rabbitmq-bundle rabbitmq
-            image: {get_param: ContainerRabbitmqImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro
-          rabbitmq_init_bundle:
-            start_order: 1
             detach: false
             net: host
             ipc: host
@@ -203,8 +215,8 @@ outputs:
               list_concat:
                 - - '/container_puppet_apply.sh'
                   - '2'
-                  - 'file,file_line,concat,augeas,pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation,rabbitmq_policy,rabbitmq_user,rabbitmq_ready'
-                  - 'include ::tripleo::profile::base::pacemaker;include ::tripleo::profile::pacemaker::rabbitmq_bundle'
+                  - 'file,file_line,concat,augeas,rabbitmq_policy,rabbitmq_user,rabbitmq_ready'
+                  - 'include tripleo::profile::pacemaker::rabbitmq_bundle'
                 - if:
                   - puppet_debug_enabled
                   - - '--debug'
@@ -214,10 +226,6 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, container_puppet_apply_volumes]}
                 - - /bin/true:/bin/epmd
-                - if:
-                  - docker_enabled
-                  - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - null
             environment:
               # https://launchpad.net/bugs/1822673 (lang/lc_all to utf-8 are an elixir requirement)
               LANG: 'en_US.UTF-8'
@@ -231,17 +239,10 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/lib/rabbitmq, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/rabbitmq, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/rabbitmq, 'setype': svirt_sandbox_file_t }
-        - name: rabbitmq logs readme
-          copy:
-            dest: /var/log/rabbitmq/readme.txt
-            content: |
-              Log files from rabbitmq containers can be found under
-              /var/log/containers/rabbitmq.
-          ignore_errors: true
+            - { 'path': /var/lib/rabbitmq, 'setype': container_file_t }
+            - { 'path': /var/log/containers/rabbitmq, 'setype': container_file_t, 'mode': '0750' }
         - name: stop the Erlang port mapper on the host and make sure it cannot bind to the port used by container
           shell: |
             echo 'export ERL_EPMD_ADDRESS=127.0.0.1' > /etc/rabbitmq/rabbitmq-env.conf
@@ -253,12 +254,38 @@ outputs:
         - name: RabbitMQ tag container image for pacemaker
           when: step|int == 1
           import_role:
-            name: tripleo-container-tag
+            name: tripleo_container_tag
           vars:
             container_image: {get_param: ContainerRabbitmqImage}
             container_image_latest: *rabbitmq_image_pcmklatest
+        - name: RabbitMQ HA Wrappers Step
+          when: step|int == 2
+          block: &rabbitmq_puppet_bundle
+            - name: Rabbitmq puppet bundle
+              import_role:
+                name: tripleo_ha_wrapper
+              vars:
+                tripleo_ha_wrapper_service_name: rabbitmq
+                tripleo_ha_wrapper_resource_name: rabbitmq
+                tripleo_ha_wrapper_bundle_name: rabbitmq-bundle
+                tripleo_ha_wrapper_resource_state: Started
+                tripleo_ha_wrapper_puppet_config_volume: rabbitmq
+                tripleo_ha_wrapper_puppet_execute: '["Rabbitmq_policy", "Rabbitmq_user"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::rabbitmq_bundle'
+                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
 
       update_tasks:
+        - name: Tear-down non-HA rabbitmq container
+          when:
+            - step|int == 1
+          block: &rabbitmq_teardown_nonha
+            - name: Remove non-HA rabbitmq container
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_container_cli: "{{ container_cli }}"
+                tripleo_containers_to_rm:
+                  - rabbitmq
         - name: Rabbit fetch and retag container image for pacemaker
           when: step|int == 2
           block: &rabbitmq_fetch_retag_container_tasks
@@ -268,6 +295,10 @@ outputs:
                 rabbitmq_image_latest: *rabbitmq_image_pcmklatest
             - name: Pull latest rabbitmq images
               command: "{{container_cli}} pull {{rabbitmq_image}}"
+              register: result
+              retries: 3
+              delay: 3
+              until: result.rc == 0
             - name: Get previous rabbitmq image id
               shell: "{{container_cli}} inspect --format '{{'{{'}}.Id{{'}}'}}' {{rabbitmq_image_latest}}"
               register: old_rabbitmq_image_id
@@ -277,27 +308,25 @@ outputs:
               register: new_rabbitmq_image_id
             - name: Retag pcmklatest to latest rabbitmq image
               include_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{rabbitmq_image}}"
                 container_image_latest: "{{rabbitmq_image_latest}}"
               when:
                 - old_rabbitmq_image_id.stdout != new_rabbitmq_image_id.stdout
-            - block:
-                - name: Get a list of container using rabbitmq image
-                  shell: "{{container_cli}} ps -a -q -f 'ancestor={{old_rabbitmq_image_id.stdout}}'"
-                  register: rabbitmq_containers_to_destroy
-                # It will be recreated with the delpoy step.
-                - name: Remove any container using the same rabbitmq image
-                  shell: "{{container_cli}} rm -fv {{item}}"
-                  with_items: "{{ rabbitmq_containers_to_destroy.stdout_lines }}"
-                - name: Remove previous rabbitmq images
-                  shell: "{{container_cli}} rmi -f {{old_rabbitmq_image_id.stdout}}"
-              when:
-                - old_rabbitmq_image_id.stdout != ''
-                - old_rabbitmq_image_id.stdout != new_rabbitmq_image_id.stdout
+
+      post_update_tasks:
+        - name: Rabbitmq bundle post update
+          when: step|int == 1
+          block: *rabbitmq_puppet_bundle
+          vars:
+            tripleo_ha_wrapper_minor_update: true
 
       upgrade_tasks:
+        - name: Tear-down non-HA rabbitmq container
+          when:
+            - step|int == 0
+          block: *rabbitmq_teardown_nonha
         - name: Prepare switch of rabbitmq image name
           when:
             - step|int == 0
@@ -314,7 +343,7 @@ outputs:
               block:
                 - name: Temporarily tag the current rabbitmq image id with the upgraded image name
                   import_role:
-                    name: tripleo-container-tag
+                    name: tripleo_container_tag
                   vars:
                     container_image: "{{rabbitmq_image_current}}"
                     container_image_latest: "{{rabbitmq_image_latest}}"
@@ -351,7 +380,7 @@ outputs:
               block:
                 - name: Check rabbitmq logging configuration in pacemaker
                   command: cibadmin --query --xpath "//storage-mapping[@id='rabbitmq-log']"
-                  ignore_errors: true
+                  failed_when: false
                   register: rabbitmq_logs_moved
                 - name: Add a bind mount for logging in the rabbitmq bundle
                   # rc == 6 means the configuration doesn't exist in the CIB
@@ -370,6 +399,7 @@ outputs:
         - name: Create hiera data to upgrade rabbitmq in a stepwise manner.
           when:
             - step|int == 1
+            - cluster_recreate|bool
           block:
             - name: set rabbitmq upgrade node facts in a single-node environment
               set_fact:
@@ -382,11 +412,8 @@ outputs:
                 cacheable: no
               when:
                 - groups['rabbitmq'] | length > 1
-                - item.split('.')[0] in ansible_limit.split(',')
-              loop: "{{ rabbitmq_short_node_names }}"
-
-            - debug:
-                msg: "Prepare rabbitmq upgrade for {{ rabbitmq_short_node_names_upgraded }}"
+                - item.split('.')[0] in ansible_limit.split(':')
+              loop: "{{ rabbitmq_short_node_names | default([]) }}"
             - fail:
                 msg: >
                   You can't upgrade rabbitmq without staged
@@ -395,23 +422,26 @@ outputs:
               when: >-
                 rabbitmq_short_node_names_upgraded is not defined or
                 rabbitmq_short_node_names_upgraded | length == 0
-
+            - debug:
+                msg: "Prepare rabbitmq upgrade for {{ rabbitmq_short_node_names_upgraded }}"
             - name: remove rabbitmq init container on upgrade-scaleup to force re-init
-              shell: |
-                if podman inspect rabbitmq_init_bundle &> /dev/null; then
-                    podman rm rabbitmq_init_bundle
-                fi
-              when: rabbitmq_short_node_names_upgraded | length > 1
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_containers_to_rm:
+                  - rabbitmq_wait_bundle
+              when:
+                - rabbitmq_short_node_names_upgraded | length > 1
             - name: add the rabbitmq short name to hiera data for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: set.yml
               vars:
                 tripleo_upgrade_key: rabbitmq_short_node_names_override
                 tripleo_upgrade_value: "{{rabbitmq_short_node_names_upgraded}}"
             - name: remove the extra hiera data needed for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: remove.yml
               vars:
                 tripleo_upgrade_key: rabbitmq_short_node_names_override
@@ -420,33 +450,3 @@ outputs:
           when:
             - step|int == 3
           block: *rabbitmq_fetch_retag_container_tasks
-
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-          block:
-            - name: Check cluster resource status of rabbitmq
-              pacemaker_resource:
-                resource: {get_attr: [RabbitmqBase, role_data, service_name]}
-                state: show
-                check_mode: false
-              ignore_errors: true
-              register: rabbitmq_res_result
-            - name: Set fact rabbitmq_res
-              set_fact:
-                rabbitmq_res: "{{ rabbitmq_res_result.rc == 0 }}"
-        - name: Disable the rabbitmq cluster resource
-          pacemaker_resource:
-            resource:  {get_attr: [RabbitmqBase, role_data, service_name]}
-            state: disable
-            wait_for_resource: true
-          register: rabbitmq_output
-          retries: 5
-          until: rabbitmq_output.rc == 0
-          when:
-            - step|int == 2
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-            - rabbitmq_res|bool

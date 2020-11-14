@@ -44,42 +44,40 @@ outputs:
     description: Role data for the IPSEC service
     value:
       service_name: ipsec
-      config_settings:
-        tripleo::ipsec::firewall_rules:
-          '100 IPSEC IKE INPUT':
-            dport: 500
-            sport: 500
-            proto: udp
-            chain: INPUT
-          '100 IPSEC IKE OUTPUT':
-            dport: 500
-            sport: 500
-            proto: udp
-            chain: OUTPUT
-          '100 IPSEC IKE NAT-Traversal INPUT':
-            dport: 4500
-            sport: 4500
-            proto: udp
-            chain: INPUT
-          '100 IPSEC IKE NAT-Traversal OUTPUT':
-            dport: 4500
-            sport: 4500
-            proto: udp
-            chain: OUTPUT
-          '100 IPSEC ESP INPUT':
-            proto: esp
-            chain: INPUT
-          '100 IPSEC ESP OUTPUT':
-            proto: esp
-            chain: OUTPUT
-          '100 IPSEC Authentication Header INPUT':
-            proto: ah
-            chain: INPUT
-          '100 IPSEC Authentication Header OUTPUT':
-            proto: ah
-            chain: OUTPUT
+      firewall_rules:
+        '100 IPSEC IKE INPUT':
+          dport: 500
+          sport: 500
+          proto: udp
+          chain: INPUT
+        '100 IPSEC IKE OUTPUT':
+          dport: 500
+          sport: 500
+          proto: udp
+          chain: OUTPUT
+        '100 IPSEC IKE NAT-Traversal INPUT':
+          dport: 4500
+          sport: 4500
+          proto: udp
+          chain: INPUT
+        '100 IPSEC IKE NAT-Traversal OUTPUT':
+          dport: 4500
+          sport: 4500
+          proto: udp
+          chain: OUTPUT
+        '100 IPSEC ESP INPUT':
+          proto: esp
+          chain: INPUT
+        '100 IPSEC ESP OUTPUT':
+          proto: esp
+          chain: OUTPUT
+        '100 IPSEC Authentication Header INPUT':
+          proto: ah
+          chain: INPUT
+        '100 IPSEC Authentication Header OUTPUT':
+          proto: ah
+          chain: OUTPUT
       upgrade_tasks: []
-      step_config: ''
       external_deploy_tasks:
         - name: IPSEC configuration on step 1
           when: step|int == 1
@@ -87,13 +85,13 @@ outputs:
           - name: Generate PSK
             command: openssl rand -base64 48
             register: generated_psk
-            no_log: true
+            no_log: "{{ hide_sensitive_logs | bool }}"
           - name: generate ipsec global vars
             set_fact:
               ipsec_psk: "{{ generated_psk.stdout }}"
             delegate_to: "{{item}}"
             delegate_facts: true
-            no_log: true
+            no_log: "{{ hide_sensitive_logs | bool }}"
             with_items:
             - "{{ groups.ipsec }}"
       deploy_steps_tasks:
@@ -101,7 +99,7 @@ outputs:
           when: step|int == 1
           block:
           - include_role:
-              name: tripleo-ipsec
+              name: tripleo_ipsec
             vars:
               map_merge:
               - ipsec_configure_vips: false
@@ -115,7 +113,7 @@ outputs:
           when: step|int == 3
           block:
           - include_role:
-              name: tripleo-ipsec
+              name: tripleo_ipsec
             vars:
               map_merge:
               - ipsec_configure_vips: true

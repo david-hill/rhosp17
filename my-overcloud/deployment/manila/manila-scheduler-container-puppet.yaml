@@ -71,7 +71,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::base::manila::scheduler"
+            - - "include tripleo::profile::base::manila::scheduler"
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerManilaConfigImage}
       kolla_config:
@@ -98,7 +98,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/manila_scheduler.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/manila:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/manila:/var/log/manila:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -108,39 +108,12 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
-        - name: manila logs readme
-          copy:
-            dest: /var/log/manila/readme.txt
-            content: |
-              Log files from manila containers can be found under
-              /var/log/containers/manila and /var/log/containers/httpd/manila-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/manila, 'setype': container_file_t, 'mode': '0750' }
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink
             persistent: yes
             state: yes
       upgrade_tasks: []
-      fast_forward_upgrade_tasks:
-        - name: Check if manila_scheduler is deployed
-          command: systemctl is-enabled --quiet openstack-manila-scheduler
-          ignore_errors: True
-          register: manila_scheduler_enabled_result
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Set fact manila_scheduler_enabled
-          set_fact:
-            manila_scheduler_enabled: "{{ manila_scheduler_enabled_result.rc == 0 }}"
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Stop openstack-manila-scheduler
-          service: name=openstack-manila-scheduler state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - manila_scheduler_enabled|bool

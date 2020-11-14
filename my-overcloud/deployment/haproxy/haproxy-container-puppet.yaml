@@ -104,9 +104,16 @@ parameters:
     type: string
     description: Specifies the default CRL PEM file to use for revocation if
                  TLS is used for services in the internal network.
+  InternalTLSCRLPEMDir:
+    default: '/etc/pki/CA/crl/'
+    type: string
+    description: The directory of the CRL PEM file to be mounted.
+  ZaqarWsTimeout:
+    default: '14400'
+    type: string
+    description: The tunnel timeout in seconds for the Zaqar API.
 
 conditions:
-  puppet_debug_enabled: {get_param: ConfigDebug}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   public_tls_enabled:
     and:
@@ -153,17 +160,14 @@ outputs:
     description: Role data for the HAproxy role.
     value:
       service_name: haproxy
+      firewall_rules:
+        '107 haproxy stats':
+          dport: 1993
       monitoring_subscription: {get_param: MonitoringSubscriptionHaproxy}
       config_settings:
         map_merge:
           - get_attr: [HAProxyLogging, config_settings]
           - tripleo::haproxy::haproxy_service_manage: false
-            # NOTE(jaosorior): We disable the CRL since we have no way to restart haproxy
-            # when this is updated
-            tripleo::haproxy::crl_file: null
-          - tripleo::haproxy::firewall_rules:
-              '107 haproxy stats':
-                dport: 1993
             tripleo::haproxy::haproxy_log_address: {get_param: HAProxySyslogAddress}
             tripleo::haproxy::haproxy_log_facility: {get_param: HAProxySyslogFacility}
             tripleo::haproxy::haproxy_stats_user: {get_param: HAProxyStatsUser}
@@ -177,6 +181,7 @@ outputs:
             tripleo::haproxy::redis_password: {get_param: RedisPassword}
             tripleo::haproxy::crl_file: {get_param: InternalTLSCRLPEMFile}
             tripleo::haproxy::haproxy_stats: {get_param: HAProxyStatsEnabled}
+            tripleo::haproxy::zaqar_ws_timeout_tunnel: {get_param: ZaqarWsTimeout}
             enable_load_balancer: {get_param: EnableLoadBalancer}
             tripleo::profile::base::haproxy::certificates_specs:
               map_merge:
@@ -197,7 +202,7 @@ outputs:
         config_volume: haproxy
         puppet_tags: haproxy_config
         step_config: |
-          class {'::tripleo::profile::base::haproxy': manage_firewall => false}
+          class {'tripleo::profile::base::haproxy': manage_firewall => false}
         config_image: {get_param: ContainerHAProxyConfigImage}
         volumes:
           list_concat:
@@ -217,6 +222,11 @@ outputs:
                   - ':'
                   - - {get_param: InternalTLSCAFile}
                     - {get_param: InternalTLSCAFile}
+                    - 'ro,shared'
+              - list_join:
+                  - ':'
+                  - - {get_param: InternalTLSCRLPEMDir}
+                    - {get_param: InternalTLSCRLPEMDir}
                     - 'ro,shared'
             - null
       kolla_config:
@@ -260,7 +270,7 @@ outputs:
                   - {get_attr: [HAProxyLogging, volumes]}
                   -
                     - /var/lib/kolla/config_files/haproxy.json:/var/lib/kolla/config_files/config.json:ro
-                    - /var/lib/config-data/puppet-generated/haproxy/:/var/lib/kolla/config_files/src:ro
+                    - /var/lib/config-data/puppet-generated/haproxy:/var/lib/kolla/config_files/src:ro
                     - /var/lib/haproxy:/var/lib/haproxy:rw,z
                   - if:
                     - public_tls_enabled
@@ -279,8 +289,8 @@ outputs:
                       - /etc/pki/tls/private/haproxy:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/haproxy:ro,shared
                       - list_join:
                           - ':'
-                          - - {get_param: InternalTLSCAFile}
-                            - {get_param: InternalTLSCAFile}
+                          - - {get_param: InternalTLSCRLPEMDir}
+                            - {get_param: InternalTLSCRLPEMDir}
                             - 'ro'
                     - null
               environment:
@@ -312,27 +322,27 @@ outputs:
                     state: restarted
                   when: logconfig is changed
         - name: Run puppet on the host to apply IPtables rules
+          no_log: true
           when: step|int == 1
+          register: puppet_host_outputs
           shell: |
-            set +e
-            puppet apply {{ puppet_debug }} --detailed-exitcodes --summarize --color=false \
+            puppet apply {{ (puppet_debug|bool) | ternary('--debug --verbose', '') }} --detailed-exitcodes --summarize --color=false \
                 --modulepath '{{ puppet_modulepath }}' --tags '{{ puppet_tags }}' -e '{{ puppet_execute }}'
-            rc=$?
-            set -e
-            set +ux
-            if [ $rc -eq 2 -o $rc -eq 0 ]; then
-                exit 0
-            fi
-            exit $rc
+          register: puppet_host_outputs
+          changed_when: puppet_host_outputs.rc == 2
+          failed_when: false
           vars:
-            puppet_execute: include ::tripleo::profile::base::haproxy
+            puppet_execute: include tripleo::profile::base::haproxy
             puppet_tags: tripleo::firewall::rule
             puppet_modulepath: /etc/puppet/modules:/opt/stack/puppet-modules:/usr/share/openstack-puppet/modules
-            puppet_debug:
-              if:
-                - puppet_debug_enabled
-                - '--debug --verbose'
-                - ''
+            puppet_debug: {get_param: ConfigDebug}
+        - name: "Debug output for task: Run puppet on the host to apply IPtables rules"
+          debug:
+            var: puppet_host_outputs.stdout_lines | default([]) | union(puppet_host_outputs.stderr_lines | default([]))
+          when:
+            - not (ansible_check_mode | bool)
+            - puppet_host_outputs.rc is defined
+          failed_when: puppet_host_outputs.rc not in [0, 2]
       upgrade_tasks:
         - name: ensure we have haproxy log dir with the correct setype
           file:
@@ -351,7 +361,7 @@ outputs:
           block:
             - name: Stop haproxy container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - haproxy
@@ -363,17 +373,10 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/haproxy, 'setype': var_log_t }
-            - { 'path': /var/lib/haproxy, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/haproxy, 'setype': svirt_sandbox_file_t }
-        - name: haproxy logs readme
-          copy:
-            dest: /var/log/haproxy/readme.txt
-            content: |
-              Log files from the haproxy containers can be found under
-              /var/log/containers/haproxy.
-          ignore_errors: true
+            - { 'path': /var/log/containers/haproxy, 'setype': var_log_t, 'mode': '0750' }
+            - { 'path': /var/lib/haproxy, 'setype': container_file_t }
       metadata_settings:
         list_concat:
           - {get_attr: [HAProxyPublicTLS, role_data, metadata_settings]}

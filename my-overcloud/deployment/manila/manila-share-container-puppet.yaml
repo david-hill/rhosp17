@@ -55,6 +55,10 @@ parameters:
     description: The password for the manila service account.
     type: string
     hidden: true
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
 
 resources:
 
@@ -86,12 +90,16 @@ outputs:
       config_settings:
         map_merge:
           - get_attr: [ManilaBase, role_data, config_settings]
-          - manila::volume::cinder::cinder_admin_tenant_name: 'service'
+          -
             # keystone_authtoken
             manila::keystone::authtoken::password: {get_param: ManilaPassword}
             manila::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri]}
             manila::keystone::authtoken::auth_url: { get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             manila::keystone::authtoken::project_name: 'service'
+            manila::keystone::authtoken::user_domain_name: 'Default'
+            manila::keystone::authtoken::project_domain_name: 'Default'
+            manila::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            manila::keystone::authtoken::interface: 'internal'
             # compute
             manila::compute::nova::username: 'manila'
             manila::compute::nova::password: {get_param: ManilaPassword}
@@ -100,6 +108,7 @@ outputs:
             manila::compute::nova::user_domain_name: 'Default'
             manila::compute::nova::project_domain_name: 'Default'
             manila::compute::nova::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            manila::compute::nova::region_name: {get_param: KeystoneRegion}
             # network
             manila::network::neutron::username: 'manila'
             manila::network::neutron::password: {get_param: ManilaPassword}
@@ -108,6 +117,16 @@ outputs:
             manila::network::neutron::user_domain_name: 'Default'
             manila::network::neutron::project_domain_name: 'Default'
             manila::network::neutron::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            manila::network::neutron::region_name: {get_param: KeystoneRegion}
+            # volume
+            manila::volume::cinder::username: 'manila'
+            manila::volume::cinder::password: {get_param: ManilaPassword}
+            manila::volume::cinder::auth_type: 'password'
+            manila::volume::cinder::project_name: 'service'
+            manila::volume::cinder::user_domain_name: 'Default'
+            manila::volume::cinder::project_domain_name: 'Default'
+            manila::volume::cinder::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            manila::volume::cinder::region_name: {get_param: KeystoneRegion}
       service_config_settings:
         {get_attr: [ManilaBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS
@@ -117,7 +136,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::base::manila::share"
+            - - "include tripleo::profile::base::manila::share"
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerManilaConfigImage}
       kolla_config:
@@ -163,39 +182,12 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
-        - name: manila logs readme
-          copy:
-            dest: /var/log/manila/readme.txt
-            content: |
-              Log files from manila containers can be found under
-              /var/log/containers/manila and /var/log/containers/httpd/manila-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/manila, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/manila, 'setype': container_file_t }
         - name: ensure ceph configurations exist
           file:
             path: /etc/ceph
             state: directory
       upgrade_tasks: []
-      fast_forward_upgrade_tasks:
-        - name: Check if manila_share is deployed
-          command: systemctl is-enabled --quiet openstack-manila-share
-          ignore_errors: True
-          register: manila_share_enabled_result
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Set fact manila_share_enabled
-          set_fact:
-            manila_share_enabled: "{{ manila_share_enabled_result.rc == 0 }}"
-          when:
-            - step|int == 0
-            - release == 'ocata'
-        - name: Stop openstack-manila-share
-          service: name=openstack-manila-share state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - manila_share_enabled|bool

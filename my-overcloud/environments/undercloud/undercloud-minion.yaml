@@ -16,16 +16,102 @@ parameter_defaults:
   # Type: boolean
   EnablePackageInstall: True
 
+  # Type of disk cleaning before and between deployments, "full" for full cleaning, "metadata" to clean only disk metadata (partition table).
+  # Type: string
+  IronicCleaningDiskErase: metadata
+
+  # Name or UUID of the *overcloud* network used for cleaning bare metal nodes. The default value of "provisioning" can be left during the initial deployment (when no networks are created yet) and should be changed to an actual UUID in a post-deployment stack update.
+  # Type: string
+  IronicCleaningNetwork: ctlplane
+
+  # Inspect interface implementation to use by default. Leave empty to use the hardware type default.
+  # Type: string
+  IronicDefaultInspectInterface: inspector
+
+  # Whether to enable use of staging drivers.
+  # Type: boolean
+  IronicEnableStagingDrivers: True
+
+  # Enabled boot interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledBootInterfaces: ['pxe', 'ilo-pxe']
+
+  # Enabled console interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledConsoleInterfaces: ['ipmitool-socat', 'ilo', 'no-console']
+
+  # Enabled deploy interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledDeployInterfaces: ['iscsi', 'direct', 'ansible']
+
+  # Enabled Ironic hardware types
+  # Type: comma_delimited_list
+  IronicEnabledHardwareTypes: ['ipmi', 'redfish', 'idrac', 'ilo']
+
+  # Enabled inspect interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledInspectInterfaces: ['inspector', 'no-inspect']
+
+  # Enabled management interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledManagementInterfaces: ['ipmitool', 'redfish', 'idrac', 'ilo']
+
+  # Enabled network interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledNetworkInterfaces: ['flat']
+
+  # Enabled power interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledPowerInterfaces: ['ipmitool', 'redfish', 'idrac', 'ilo']
+
+  # Enabled RAID interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledRaidInterfaces: ['no-raid']
+
+  # Enabled rescue interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledRescueInterfaces: ['no-rescue', 'agent']
+
+  # Enabled storage interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledStorageInterfaces: ['noop']
+
+  # Enabled vendor interface implementations. Each hardware type must have at least one valid implementation enabled.
+  # Type: comma_delimited_list
+  IronicEnabledVendorInterfaces: ['ipmitool', 'idrac', 'no-vendor']
+
+  # Whether to force power state during sync.
+  # Type: boolean
+  IronicForcePowerStateDuringSync: False
+
+  # Name or UUID of the *overcloud* network used for provisioning of bare metal nodes, if IronicDefaultNetworkInterface is set to "neutron". The default value of "provisioning" can be left during the initial deployment (when no networks are created yet) and should be changed to an actual UUID in a post-deployment stack update.
+  # Type: string
+  IronicProvisioningNetwork: ctlplane
+
+  # Name or UUID of the *overcloud* network used for resucing of bare metal nodes, if IronicDefaultRescueInterface is not set to "no-rescue". The default value of "provisioning" can be left during the initial deployment (when no networks are created yet) and should be changed to an actual UUID in a post-deployment stack update.
+  # Type: string
+  IronicRescuingNetwork: ctlplane
+
   # NTP servers list. Defaulted to a set of pool.ntp.org servers in order to have a sane default for Pacemaker deployments when not configuring this parameter by default.
   # Type: comma_delimited_list
   NtpServer: ['0.pool.ntp.org', '1.pool.ntp.org', '2.pool.ntp.org', '3.pool.ntp.org']
+
+  # How the server should receive the metadata required for software configuration.
+  # Type: string
+  SoftwareConfigTransport: POLL_SERVER_HEAT
 
   # Set this to true to open up ssh access from all sources.
   # Type: boolean
   SshFirewallAllowAll: True
 
+  # UndercloudMinion NetworkConfigTemplate
+  # Type: string
+  UndercloudMinionNetworkConfigTemplate: templates/undercloud.j2
+
 resource_registry:
   OS::TripleO::Network::Ports::ControlPlaneVipPort: OS::Heat::None
+  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
+  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -53,19 +139,7 @@ resource_registry:
   OS::TripleO::Services::CephRgw: OS::Heat::None
   OS::TripleO::Services::Chrony: OS::Heat::None
   OS::TripleO::Services::CinderApi: OS::Heat::None
-  OS::TripleO::Services::CinderBackendDellEMCUnity: OS::Heat::None
-  OS::TripleO::Services::CinderBackendDellEMCVMAXISCSI: OS::Heat::None
-  OS::TripleO::Services::CinderBackendDellEMCVNX: OS::Heat::None
-  OS::TripleO::Services::CinderBackendDellEMCXTREMIOISCSI: OS::Heat::None
-  OS::TripleO::Services::CinderBackendDellPs: OS::Heat::None
-  OS::TripleO::Services::CinderBackendDellSc: OS::Heat::None
-  OS::TripleO::Services::CinderBackendNVMeOF: OS::Heat::None
-  OS::TripleO::Services::CinderBackendNetApp: OS::Heat::None
-  OS::TripleO::Services::CinderBackendPure: OS::Heat::None
-  OS::TripleO::Services::CinderBackendScaleIO: OS::Heat::None
-  OS::TripleO::Services::CinderBackendVRTSHyperScale: OS::Heat::None
   OS::TripleO::Services::CinderBackup: OS::Heat::None
-  OS::TripleO::Services::CinderHPELeftHandISCSI: OS::Heat::None
   OS::TripleO::Services::CinderScheduler: OS::Heat::None
   OS::TripleO::Services::CinderVolume: OS::Heat::None
   OS::TripleO::Services::Clustercheck: OS::Heat::None
@@ -87,7 +161,6 @@ resource_registry:
   OS::TripleO::Services::DesignateWorker: OS::Heat::None
   OS::TripleO::Services::Docker: OS::Heat::None
   OS::TripleO::Services::DockerRegistry: OS::Heat::None
-  OS::TripleO::Services::Ec2Api: OS::Heat::None
   OS::TripleO::Services::Etcd: OS::Heat::None
   OS::TripleO::Services::ExternalSwiftProxy: OS::Heat::None
   OS::TripleO::Services::GlanceApi: OS::Heat::None
@@ -110,10 +183,7 @@ resource_registry:
   OS::TripleO::Services::IronicNeutronAgent: OS::Heat::None
   OS::TripleO::Services::IronicPxe: OS::Heat::None
   OS::TripleO::Services::Iscsid: OS::Heat::None
-  OS::TripleO::Services::Keepalived: OS::Heat::None
   OS::TripleO::Services::Keystone: OS::Heat::None
-  OS::TripleO::Services::Kubernetes::Master: OS::Heat::None
-  OS::TripleO::Services::Kubernetes::Worker: OS::Heat::None
   OS::TripleO::Services::LiquidioCompute: OS::Heat::None
   OS::TripleO::Services::Logging::BarbicanApi: OS::Heat::None
   OS::TripleO::Services::Logging::GlanceApi: OS::Heat::None
@@ -165,15 +235,11 @@ resource_registry:
   OS::TripleO::Services::NeutronLbaasv2Agent: OS::Heat::None
   OS::TripleO::Services::NeutronLbaasv2Api: OS::Heat::None
   OS::TripleO::Services::NeutronLinuxbridgeAgent: OS::Heat::None
-  OS::TripleO::Services::NeutronML2FujitsuCfab: OS::Heat::None
-  OS::TripleO::Services::NeutronML2FujitsuFossw: OS::Heat::None
   OS::TripleO::Services::NeutronMetadataAgent: OS::Heat::None
   OS::TripleO::Services::NeutronNuageVrs: OS::Heat::None
   OS::TripleO::Services::NeutronOvsAgent: OS::Heat::None
-  OS::TripleO::Services::NeutronServer: OS::Heat::None
   OS::TripleO::Services::NeutronSfcApi: OS::Heat::None
   OS::TripleO::Services::NeutronSriovAgent: OS::Heat::None
-  OS::TripleO::Services::NeutronSriovHostConfig: OS::Heat::None
   OS::TripleO::Services::NeutronVppAgent: OS::Heat::None
   OS::TripleO::Services::NovaAZConfig: OS::Heat::None
   OS::TripleO::Services::NovaApi: OS::Heat::None
@@ -198,10 +264,6 @@ resource_registry:
   OS::TripleO::Services::OctaviaHealthManager: OS::Heat::None
   OS::TripleO::Services::OctaviaHousekeeping: OS::Heat::None
   OS::TripleO::Services::OctaviaWorker: OS::Heat::None
-  OS::TripleO::Services::OpenShift::GlusterFS: OS::Heat::None
-  OS::TripleO::Services::OpenShift::Infra: OS::Heat::None
-  OS::TripleO::Services::OpenShift::Master: OS::Heat::None
-  OS::TripleO::Services::OpenShift::Worker: OS::Heat::None
   OS::TripleO::Services::OsloMessagingNotify: OS::Heat::None
   OS::TripleO::Services::OsloMessagingRpc: OS::Heat::None
   OS::TripleO::Services::Pacemaker: OS::Heat::None
@@ -229,9 +291,9 @@ resource_registry:
   OS::TripleO::Services::TripleoUI: OS::Heat::None
   OS::TripleO::Services::Tuned: OS::Heat::None
   OS::TripleO::Services::UndercloudMinionMessaging: ../../deployment/undercloud/minion-rabbitmq-puppet.yaml
+  OS::TripleO::Services::UndercloudTLS: OS::Heat::None
   OS::TripleO::Services::UndercloudUpgrade: OS::Heat::None
   OS::TripleO::Services::VRTSHyperScale: OS::Heat::None
   OS::TripleO::Services::Vpp: OS::Heat::None
   OS::TripleO::Services::Xinetd: OS::Heat::None
   OS::TripleO::Services::Zaqar: OS::Heat::None
-  OS::TripleO::UndercloudMinion::Net::SoftwareConfig: ../../net-config-undercloud.yaml

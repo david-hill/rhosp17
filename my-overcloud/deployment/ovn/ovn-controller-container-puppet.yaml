@@ -36,6 +36,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   OVNSouthboundServerPort:
     description: Port of the Southbound DB Server
     type: number
@@ -125,6 +131,29 @@ outputs:
     description: Role data for the Ovn Controller agent.
     value:
       service_name: ovn_controller
+      firewall_rules:
+        '118 neutron vxlan networks':
+              proto: 'udp'
+              dport: 4789
+        '119 neutron geneve networks':
+              proto: 'udp'
+              dport: 6081
+        '120 neutron geneve networks no conntrack':
+              proto:  'udp'
+              dport:  6081
+              table:  'raw'
+              chain:  'OUTPUT'
+              jump:   'NOTRACK'
+              action: 'append'
+              state: []
+        '121 neutron geneve networks no conntrack':
+              proto:  'udp'
+              dport:  6081
+              table:  'raw'
+              chain:  'PREROUTING'
+              jump:   'NOTRACK'
+              action: 'append'
+              state: []
       config_settings:
         map_merge:
           - get_attr: [RoleParametersValue, value]
@@ -139,13 +168,6 @@ outputs:
             ovn::controller::hostname: "%{hiera('fqdn_canonical')}"
             ovn::controller::ovn_remote_probe_interval: {get_param: OVNRemoteProbeInterval}
             ovn::controller::ovn_openflow_probe_interval: {get_param: OVNOpenflowProbeInterval}
-            tripleo::ovn_controller::firewall_rules:
-              '118 neutron vxlan networks':
-                    proto: 'udp'
-                    dport: 4789
-              '119 neutron geneve networks':
-                    proto: 'udp'
-                    dport: 6081
           - if:
               - force_config_drive
               - nova::compute::force_config_drive: true
@@ -175,7 +197,7 @@ outputs:
         puppet_tags: vs_config,exec
         config_volume: ovn_controller
         step_config: |
-          include ::tripleo::profile::base::neutron::agents::ovn
+          include tripleo::profile::base::neutron::agents::ovn
         config_image: {get_param: ContainerOvnControllerConfigImage}
         # We need to mount /run for puppet_config step. This is because
         # puppet-vswitch runs the commands "ovs-vsctl set open_vswitch . external_ids:..."
@@ -204,6 +226,9 @@ outputs:
             - path: /var/log/openvswitch
               owner: root:root
               recurse: true
+            - path: /var/log/ovn
+              owner: root:root
+              recurse: true
       metadata_settings:
         if:
           - internal_tls_enabled
@@ -227,6 +252,8 @@ outputs:
                  -
                    - /lib/modules:/lib/modules:ro
                    - /run/openvswitch:/run/openvswitch:shared,z
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
           ovn_controller:
             start_order: 1
             image: *ovn_controller_image
@@ -252,7 +279,9 @@ outputs:
                   # openvswitch systemd script is fixed to not delete /run/openvswitch
                   # folder in the host when openvswitch service is stopped.
                   - /run:/run
+                  - /var/lib/openvswitch/ovn:/run/ovn:shared,z
                   - /var/log/containers/openvswitch:/var/log/openvswitch:z
+                  - /var/log/containers/openvswitch:/var/log/ovn:z
                 - if:
                   - internal_tls_enabled
                   -
@@ -272,19 +301,28 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/openvswitch, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/openvswitch, 'setype': openvswitch_log_t }
-        - name: openvswitch logs readme
-          copy:
-            dest: /var/log/openvswitch/readme.txt
-            content: |
-              Log files from openvswitch containers can be found under
-              /var/log/containers/openvswitch.
-          ignore_errors: true
+            - { 'path': /var/log/containers/openvswitch, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/openvswitch/ovn, 'setype': container_file_t }
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink
             persistent: yes
             state: yes
+        - name: Copy in cleanup script
+          copy:
+            content: {get_file: ../neutron/neutron-cleanup}
+            dest: '/usr/libexec/neutron-cleanup'
+            force: yes
+            mode: '0755'
+        - name: Copy in cleanup service
+          copy:
+            content: {get_file: ../neutron/neutron-cleanup.service}
+            dest: '/usr/lib/systemd/system/neutron-cleanup.service'
+            force: yes
+        - name: Enabling the cleanup service
+          service:
+            name: neutron-cleanup
+            enabled: yes
       upgrade_tasks: []

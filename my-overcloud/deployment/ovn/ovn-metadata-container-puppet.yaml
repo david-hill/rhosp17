@@ -59,15 +59,21 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   NeutronMetadataProxySharedSecret:
     description: Shared secret to prevent spoofing
     type: string
     hidden: true
-  NeutronWorkers:
+  NeutronMetadataWorkers:
     default: ''
     description: |
-      Sets the number of worker processes for the neutron metadata agent. The
-      default value results in the configuration being left unset and a
+      Sets the number of worker processes for the neutron OVN metadata agent.
+      The default value results in the configuration being left unset and a
       system-dependent default will be chosen (usually the number of
       processors). Please note that this can result in a large number of
       processes and memory consumption on systems with a large core count. On
@@ -112,13 +118,17 @@ parameters:
     description: Additional domain sockets for the docker daemon to bind to (useful for mounting
                  into containers that launch other containers)
     type: comma_delimited_list
+  OVNRemoteProbeInterval:
+    description: Probe interval in ms
+    type: number
+    default: 60000
 
 conditions:
   haproxy_wrapper_enabled: {equals: [{get_param: OVNEnableHaproxyDockerWrapper}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
   service_debug_unset: {equals : [{get_param: OVNWrapperDebug}, false]}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  neutron_workers_unset: {equals : [{get_param: NeutronWorkers}, '']}
+  neutron_metadata_workers_unset: {equals : [{get_param: NeutronMetadataWorkers}, '']}
 
 resources:
 
@@ -166,6 +176,7 @@ outputs:
             neutron::agents::ovn_metadata::metadata_host: {get_param: [EndpointMap, NovaMetadataCellInternal, host_nobrackets]}
             neutron::agents::ovn_metadata::ovsdb_connection_timeout: {get_param: OVNDbConnectionTimeout}
             ovn::southbound::port: {get_param: OVNSouthboundServerPort}
+            neutron::agents::ovn_metadata::ovn_remote_probe_interval: {get_param: OVNRemoteProbeInterval}
             neutron::agents::ovn_metadata::debug:
                 if:
                 - service_debug_unset
@@ -178,9 +189,9 @@ outputs:
               - 'http'
           -
             if:
-            - neutron_workers_unset
+            - neutron_metadata_workers_unset
             - {}
-            - neutron::agents::ovn_metadata::metadata_workers: {get_param: NeutronWorkers}
+            - neutron::agents::ovn_metadata::metadata_workers: {get_param: NeutronMetadataWorkers}
           - if:
             - internal_tls_enabled
             - tripleo::profile::base::neutron::ovn_metadata::ovn_sb_ca_cert: {get_param: InternalTLSCAFile}
@@ -217,7 +228,7 @@ outputs:
           command:
             list_join:
             - ' '
-            - - /usr/bin/networking-ovn-metadata-agent --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/networking-ovn/networking-ovn-metadata-agent.ini --config-dir /etc/neutron/conf.d/networking-ovn-metadata-agent
+            - - /usr/bin/networking-ovn-metadata-agent --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugins/networking-ovn/networking-ovn-metadata-agent.ini
               - get_attr: [NeutronLogging, cmd_extra_args]
           config_files:
             - source: "/var/lib/kolla/config_files/src/*"
@@ -240,24 +251,6 @@ outputs:
               optional: true
               perm: '0644'
       container_config_scripts: {get_attr: [ContainersCommon, container_config_scripts]}
-      deploy_steps_tasks:
-        - when: step|int == 1
-          block:
-            - name: set conditions
-              set_fact:
-                haproxy_wrapper_enabled: {get_param: OVNEnableHaproxyDockerWrapper}
-                debug_enabled: {get_param: Debug}
-                docker_additional_sockets: {get_param: DockerAdditionalSockets}
-            - name: create kill_scripts directory within /var/lib/neutron
-              file:
-                state: directory
-                path: /var/lib/neutron/kill_scripts
-            - name: create haproxy kill script
-              when: haproxy_wrapper_enabled|bool
-              copy:
-                dest: /var/lib/neutron/kill_scripts/haproxy-kill
-                mode: 0755
-                content: {get_file: ../neutron/kill-script}
       docker_config:
         step_2:
           create_haproxy_wrapper:
@@ -292,13 +285,15 @@ outputs:
                 - - '/container_puppet_apply.sh'
                   - '4'
                   - 'exec'
-                  - 'include ::tripleo::profile::base::neutron::ovn_metadata'
+                  - 'include tripleo::profile::base::neutron::ovn_metadata'
             image: {get_param: ContainerOvnMetadataImage}
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, container_puppet_apply_volumes]}
                 - - /lib/modules:/lib/modules:ro
                   - /run/openvswitch:/run/openvswitch:shared,z
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
           ovn_metadata_agent:
             start_order: 1
             image: {get_param: ContainerOvnMetadataImage}
@@ -314,7 +309,7 @@ outputs:
                 - {get_attr: [NeutronLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/ovn_metadata_agent.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/neutron/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
                   - /lib/modules:/lib/modules:ro
                   - /run/openvswitch:/run/openvswitch:shared,z
                   - /var/lib/neutron:/var/lib/neutron:shared,z
@@ -353,14 +348,35 @@ outputs:
           - - name: create /run/netns with temp namespace
               command: ip netns add ns_temp
               register: ipnetns_add_result
-              ignore_errors: True
-          - - name: remove temp namespace
+              failed_when: false
+            - name: remove temp namespace
               command: ip netns delete ns_temp
-              ignore_errors: True
-              when: ipnetns_add_result.rc == 0
-          - - name: create /var/lib/neutron
+              failed_when: false
+              when:
+                - ipnetns_add_result.rc is defined
+                - ipnetns_add_result.rc == 0
+            - name: create /var/lib/neutron
               file:
                 path: /var/lib/neutron
                 state: directory
-                setype: svirt_sandbox_file_t
+                setype: container_file_t
+            - name: set conditions
+              set_fact:
+                haproxy_wrapper_enabled: {get_param: OVNEnableHaproxyDockerWrapper}
+                debug_enabled:
+                  if:
+                    - service_debug_unset
+                    - {get_param: Debug }
+                    - {get_param: NeutronWrapperDebug}
+                docker_additional_sockets: {get_param: DockerAdditionalSockets}
+            - name: create kill_scripts directory within /var/lib/neutron
+              file:
+                state: directory
+                path: /var/lib/neutron/kill_scripts
+            - name: create haproxy kill script
+              when: haproxy_wrapper_enabled|bool
+              copy:
+                dest: /var/lib/neutron/kill_scripts/haproxy-kill
+                mode: 0755
+                content: {get_file: ../neutron/kill-script}
       upgrade_tasks: []

@@ -15,17 +15,16 @@ resource_registry:
   OS::TripleO::Services::HeatEngine: ../../deployment/heat/heat-engine-container-puppet.yaml
   OS::TripleO::Services::BarbicanApi: ../../deployment/barbican/barbican-api-container-puppet.yaml
   OS::TripleO::Services::Zaqar: ../../deployment/zaqar/zaqar-container-puppet.yaml
-  OS::TripleO::Services::Ec2Api: ../../deployment/deprecated/ec2/ec2-api-container-puppet.yaml
-  OS::TripleO::Services::OsloMessagingRpc: ../../deployment/rabbitmq/rabbitmq-messaging-rpc-container-puppet.yaml
+  OS::TripleO::Services::OsloMessagingRpc: ../../deployment/rabbitmq/rabbitmq-messaging-rpc-pacemaker-puppet.yaml
   OS::TripleO::Services::OsloMessagingNotify: ../../deployment/rabbitmq/rabbitmq-messaging-notify-shared-puppet.yaml
-  OS::TripleO::Services::Redis: ../../deployment/database/redis-container-puppet.yaml
-  OS::TripleO::Services::CinderBackup: ../../deployment/cinder/cinder-backup-container-puppet.yaml
-  OS::TripleO::Services::CinderVolume: ../../deployment/cinder/cinder-volume-container-puppet.yaml
+  OS::TripleO::Services::Redis: ../../deployment/database/redis-pacemaker-puppet.yaml
+  OS::TripleO::Services::CinderBackup: ../../deployment/cinder/cinder-backup-pacemaker-puppet.yaml
+  OS::TripleO::Services::CinderVolume: ../../deployment/cinder/cinder-volume-pacemaker-puppet.yaml
   OS::TripleO::Services::BarbicanBackendSimpleCrypto: ../../deployment/barbican/barbican-backend-simple-crypto-puppet.yaml
-  # Some infra instances don't pass the ping test but are otherwise working.
-  # Since the OVB jobs also test this functionality we can shut it off here.
-  OS::TripleO::AllNodes::Validation: ../common/all-nodes-validation-disabled.yaml
-  OS::TripleO::Services::Horizon: OS::Heat::None
+  # NOTE(mwhahaha): cheat and use the horizon "service" for our test service
+  # since disable horizon. This allows us to not have to keep some test service
+  # in the defaults just for this case.
+  OS::TripleO::Services::Horizon: ../../deployment/tests/test-container-volume.yaml
 
 parameter_defaults:
   StandaloneExtraConfig:
@@ -35,6 +34,7 @@ parameter_defaults:
     # instead of 10 minutes. Note that tempest telemetry.alarm_granularity must
     # in sync with the archive policy, 60s too.
     ceilometer::agent::polling::polling_interval: 15
+  NotificationDriver: 'messagingv2'
   ManagePolling: true
   ManagePipeline: true
   CeilometerEnableGnocchi: true
@@ -50,3 +50,23 @@ parameter_defaults:
   SwiftCeilometerPipelineEnabled: false
   BarbicanSimpleCryptoGlobalDefault: true
   ContainerCli: podman
+  # Test mounting a container volume into the heat api container
+  ContainerTestVolumeName: test_volume
+  CinderVolumeOptVolumes:
+    - test_volume:/testvol
+  GlanceApiOptVolumes:
+    - test_volume:/testvol
+  HeatApiOptVolumes:
+    - test_volume:/testvol
+  HeatEngineApiOptVolumes:
+    - test_volume:/testvol
+  NeutronApiOptVolumes:
+    - test_volume:/testvol
+  NovaComputeOptVolumes:
+    - test_volume:/testvol
+  StandaloneExtraGroupVars:
+    cinder_fake_group_var_one: var_one_override
+  StandaloneParameters:
+    LVMFilterEnabled: true
+    LVMFilterAllowlist:
+      - /dev/allowed

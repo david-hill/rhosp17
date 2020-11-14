@@ -10,6 +10,20 @@ parameters:
   ContainerMysqlConfigImage:
     description: The container image to use for the mysql config_volume
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster.common.tag/IMAGENAME:pcmklatest'.
+    type: boolean
+  ClusterFullTag:
+    default: false
+    description: When set to true, the pacemaker service uses a fully
+                 constant tag for its container image name, e.g.
+                 'cluster.common.tag/SERVICENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -93,12 +107,24 @@ conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
+  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
 
 outputs:
   role_data:
     description: Containerized service MySQL using composable services.
     value:
       service_name: {get_attr: [MysqlBase, role_data, service_name]}
+      firewall_rules:
+        '104 mysql galera-bundle':
+          dport:
+            - 873
+            - 3123
+            - 3306
+            - 4444
+            - 4567
+            - 4568
+            - 9200
       config_settings:
         map_merge:
           - get_attr: [MysqlBase, role_data, config_settings]
@@ -123,24 +149,20 @@ outputs:
             tripleo::profile::pacemaker::database::mysql::ca_file:
               get_param: InternalTLSCAFile
             tripleo::profile::pacemaker::database::mysql_bundle::mysql_docker_image: &mysql_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: ContainerMysqlImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              if:
+                - common_tag_full
+                - "cluster.common.tag/mariadb:pcmklatest"
+                - yaql:
+                    data:
+                      if:
+                        - common_tag_enabled
+                        - yaql:
+                            data: {get_param: ContainerMysqlImage}
+                            expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                        - {get_param: ContainerMysqlImage}
+                    expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::database::mysql_bundle::control_port: 3123
             tripleo::profile::pacemaker::database::mysql_bundle::container_backend: {get_param: ContainerCli}
-            tripleo::mysql::firewall_rules:
-              '104 mysql galera-bundle':
-                dport:
-                  - 873
-                  - 3123
-                  - 3306
-                  - 4444
-                  - 4567
-                  - 4568
-                  - 9200
             tripleo::profile::pacemaker::database::mysql_bundle::bind_address:
               str_replace:
                 template:
@@ -151,6 +173,8 @@ outputs:
             if:
             - internal_tls_enabled
             -
+              tripleo::certmonger::mysql::postsave_cmd:
+                /usr/bin/certmonger-ha-resource-refresh.sh mysql galera galera-bundle Master
               tripleo::profile::pacemaker::database::mysql_bundle::ca_file:
                 get_param: InternalTLSCAFile
             - {}
@@ -163,7 +187,7 @@ outputs:
             - "\n"
             - - "['Mysql_datadir', 'Mysql_user', 'Mysql_database', 'Mysql_grant', 'Mysql_plugin'].each |String $val| { noop_resource($val) }"
               - "exec {'wait-for-settle': command => '/bin/true' }"
-              - "include ::tripleo::profile::pacemaker::database::mysql_bundle"
+              - "include tripleo::profile::pacemaker::database::mysql_bundle"
         config_image: {get_param: ContainerMysqlConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/mysql.json:
@@ -224,17 +248,19 @@ outputs:
                     - 'echo -e "\n[mysqld]\nwsrep_provider=none" >> /etc/my.cnf'
                     - 'kolla_set_configs'
                     - 'sudo -u mysql -E kolla_extend_start'
+                    - 'timeout ${DB_MAX_TIMEOUT} /bin/bash -c ''while pgrep -af /usr/bin/mysqld_safe | grep -q -v grep; do sleep 1; done'''
                     - 'mysqld_safe --skip-networking --wsrep-on=OFF &'
                     - 'timeout ${DB_MAX_TIMEOUT} /bin/bash -c ''until mysqladmin -uroot -p"${DB_ROOT_PASSWORD}" ping 2>/dev/null; do sleep 1; done'''
                     - 'mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "CREATE USER ''clustercheck''@''localhost'' IDENTIFIED BY ''${DB_CLUSTERCHECK_PASSWORD}'';"'
                     - 'mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "GRANT PROCESS ON *.* TO ''clustercheck''@''localhost'' WITH GRANT OPTION;"'
+                    - 'mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "DELETE FROM mysql.user WHERE user = ''root'' AND host NOT IN (''%'',''localhost'');"'
                     - 'timeout ${DB_MAX_TIMEOUT} mysqladmin -uroot -p"${DB_ROOT_PASSWORD}" shutdown'
             volumes: &mysql_volumes
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/mysql.json:/var/lib/kolla/config_files/config.json:rw,z
-                  - /var/lib/config-data/puppet-generated/mysql/:/var/lib/kolla/config_files/src:ro,z
+                  - /var/lib/config-data/puppet-generated/mysql:/var/lib/kolla/config_files/src:ro,z
                   - /var/lib/mysql:/var/lib/mysql:rw,z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -249,23 +275,8 @@ outputs:
                       - {get_param: MysqlRootPassword}
                       - {get_param: [DefaultPasswords, mysql_root_password]}
         step_2:
-          mysql_restart_bundle:
+          mysql_wait_bundle:
             start_order: 0
-            config_volume: mysql
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            environment:
-              TRIPLEO_MINOR_UPDATE: ''
-            command: /pacemaker_restart_bundle.sh galera-bundle mysql
-            image: {get_param: ContainerMysqlImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/mysql/:/var/lib/kolla/config_files/src:ro
-          mysql_init_bundle:
-            start_order: 1
             detach: false
             net: host
             ipc: host
@@ -274,8 +285,8 @@ outputs:
               list_concat:
                 - - '/container_puppet_apply.sh'
                   - '2'
-                  - 'file,file_line,concat,augeas,pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation,galera_ready,mysql_database,mysql_grant,mysql_user'
-                  - 'include ::tripleo::profile::base::pacemaker;include ::tripleo::profile::pacemaker::database::mysql_bundle'
+                  - 'file,file_line,concat,augeas,galera_ready,mysql_database,mysql_grant,mysql_user'
+                  - 'include tripleo::profile::pacemaker::database::mysql_bundle'
                 - if:
                   - puppet_debug_enabled
                   - - '--debug'
@@ -300,29 +311,69 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - {'path': /var/log/containers/mysql, 'setype': 'svirt_sandbox_file_t'}
-            - {'path': /var/lib/mysql, 'setype': 'svirt_sandbox_file_t'}
-            - {'path': /var/log/mariadb, 'setype': 'svirt_sandbox_file_t'}
-        - name: mysql logs readme
-          copy:
-            dest: /var/log/mariadb/readme.txt
-            content: |
-              Log files from mysql containers can be found under
-              /var/log/containers/mysql.
-          ignore_errors: true
+            - {'path': /var/log/containers/mysql, 'setype': 'container_file_t', 'mode': '0750'}
+            - {'path': /var/lib/mysql, 'setype': 'container_file_t'}
+            - {'path': /var/log/mariadb, 'setype': 'container_file_t', 'mode': '0750'}
       metadata_settings:
         get_attr: [MysqlBase, role_data, metadata_settings]
       deploy_steps_tasks:
         - name: MySQL tag container image for pacemaker
           when: step|int == 1
           import_role:
-            name: tripleo-container-tag
+            name: tripleo_container_tag
           vars:
             container_image: {get_param: ContainerMysqlImage}
             container_image_latest: *mysql_image_pcmklatest
+        - name: MySQL HA Wrappers Step
+          when: step|int == 2
+          block: &mysql_puppet_bundle
+            - name: Mysql puppet bundle
+              import_role:
+                name: tripleo_ha_wrapper
+              vars:
+                tripleo_ha_wrapper_service_name: mysql
+                tripleo_ha_wrapper_resource_name: galera
+                tripleo_ha_wrapper_bundle_name: galera-bundle
+                tripleo_ha_wrapper_resource_state: Master
+                tripleo_ha_wrapper_puppet_config_volume: mysql
+                tripleo_ha_wrapper_puppet_execute: '["Mysql_datadir", "Mysql_user", "Mysql_database", "Mysql_grant", "Mysql_plugin"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::database::mysql_bundle'
+                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
 
       update_tasks:
+        - name: Tear-down non-HA mysql container
+          when:
+            - step|int == 1
+          block: &mysql_teardown_nonha
+            - name: "stat mysql container"
+              command: "podman container exists mysql"
+              failed_when: false
+              changed_when: false
+              register: stat_mysql_container
+            - name: Create clustercheck user and permissions
+              command:
+                argv: "{{ mysql_exec_data | container_exec_cmd }}"
+              changed_when: true
+              when:
+                - stat_mysql_container.rc == 0
+              vars:
+                mysql_exec_data:
+                  environment:
+                    CLUSTERCHECK_PASSWORD: {get_param: MysqlClustercheckPassword}
+                  command:
+                    - 'mysql'
+                    - '/bin/sh'
+                    - '-c'
+                    - mysql -e "CREATE USER IF NOT EXISTS 'clustercheck'@'localhost' IDENTIFIED BY '${CLUSTERCHECK_PASSWORD}'; GRANT PROCESS ON *.* TO 'clustercheck'@'localhost' WITH GRANT OPTION;"
+            - name: Remove non-HA mysql container
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_container_cli: "{{ container_cli }}"
+                tripleo_containers_to_rm:
+                  - mysql
         - name: Mariadb fetch and retag container image for pacemaker
           when: step|int == 2
           block: &mysql_fetch_retag_container_tasks
@@ -332,6 +383,10 @@ outputs:
                 galera_image_latest: *mysql_image_pcmklatest
             - name: Pull latest galera images
               command: "{{container_cli}} pull {{galera_image}}"
+              register: result
+              retries: 3
+              delay: 3
+              until: result.rc == 0
             - name: Get previous galera image id
               shell: "{{container_cli}} inspect --format '{{'{{'}}.Id{{'}}'}}' {{galera_image_latest}}"
               register: old_galera_image_id
@@ -341,27 +396,25 @@ outputs:
               register: new_galera_image_id
             - name: Retag pcmklatest to latest galera image
               include_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{galera_image}}"
                 container_image_latest: "{{galera_image_latest}}"
               when:
                 - old_galera_image_id.stdout != new_galera_image_id.stdout
-            - block:
-                - name: Get a list of container using galera image
-                  shell: "{{container_cli}} ps -a -q -f 'ancestor={{old_galera_image_id.stdout}}'"
-                  register: galera_containers_to_destroy
-                # It will be recreated with the delpoy step.
-                - name: Remove any container using the same galera image
-                  shell: "{{container_cli}} rm -fv {{item}}"
-                  with_items: "{{ galera_containers_to_destroy.stdout_lines }}"
-                - name: Remove previous galera images
-                  shell: "{{container_cli}} rmi -f {{old_galera_image_id.stdout}}"
-              when:
-                - old_galera_image_id.stdout != ''
-                - old_galera_image_id.stdout != new_galera_image_id.stdout
+
+      post_update_tasks:
+        - name: Mysql bundle post update
+          when: step|int == 1
+          block: *mysql_puppet_bundle
+          vars:
+            tripleo_ha_wrapper_minor_update: true
 
       upgrade_tasks:
+        - name: Tear-down non-HA mysql container
+          when:
+            - step|int == 0
+          block: *mysql_teardown_nonha
         - vars:
             mysql_upgrade_persist: {get_param: MysqlUpgradePersist}
           when:
@@ -374,7 +427,7 @@ outputs:
           block:
             - name: Persist mysql data
               include_role:
-                name: tripleo-persist
+                name: tripleo_persist
                 tasks_from: persist.yml
               vars:
                 tripleo_persist_dir: /var/lib/mysql
@@ -390,7 +443,7 @@ outputs:
           block:
             - name: Restore mysql data
               include_role:
-                name: tripleo-persist
+                name: tripleo_persist
                 tasks_from: restore.yml
               vars:
                 tripleo_persist_dir: /var/lib/mysql
@@ -409,7 +462,7 @@ outputs:
                 galera_image_current: "{{galera_image_current_res.stdout}}"
             - name: Temporarily tag the current galera image id with the upgraded image name
               import_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{galera_image_current}}"
                 container_image_latest: "{{galera_image_latest}}"
@@ -452,7 +505,7 @@ outputs:
               block:
                 - name: Check Mysql logging configuration in pacemaker
                   command: cibadmin --query --xpath "//storage-mapping[@id='mysql-log']"
-                  ignore_errors: true
+                  failed_when: false
                   register: mysql_logs_moved
                 - name: Change Mysql logging configuration in pacemaker
                   # rc == 6 means the configuration doesn't exist in the CIB
@@ -475,6 +528,7 @@ outputs:
         - name: Create hiera data to upgrade mysql in a stepwise manner.
           when:
             - step|int == 1
+            - cluster_recreate|bool
           block:
             - name: set mysql upgrade node facts in a single-node environment
               set_fact:
@@ -489,11 +543,8 @@ outputs:
                 cacheable: no
               when:
                 - groups['mysql'] | length > 1
-                - item.split('.')[0] in ansible_limit.split(',')
-              loop: "{{ mysql_node_names }}"
-
-            - debug:
-                msg: "Prepare galera upgrade for {{ mysql_short_node_names_upgraded }}"
+                - item.split('.')[0] in ansible_limit.split(':')
+              loop: "{{ mysql_node_names | default([]) }}"
             - fail:
                 msg: >
                   You can't upgrade galera without staged upgrade.
@@ -503,30 +554,33 @@ outputs:
                 mysql_short_node_names_upgraded | length == 0 or
                 mysql_node_names_upgraded is not defined or
                 mysql_node_names_upgraded | length == 0
-
+            - debug:
+                msg: "Prepare galera upgrade for {{ mysql_short_node_names_upgraded }}"
             - name: remove mysql init container on upgrade-scaleup to force re-init
-              shell: |
-                if podman inspect mysql_init_bundle &> /dev/null; then
-                    podman rm mysql_init_bundle
-                fi
-              when: mysql_short_node_names_upgraded | length > 1
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_containers_to_rm:
+                  - mysql_wait_bundle
+              when:
+                - mysql_short_node_names_upgraded | length > 1
             - name: add the mysql short name to hiera data for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: set.yml
               vars:
                 tripleo_upgrade_key: mysql_short_node_names_override
                 tripleo_upgrade_value: "{{mysql_short_node_names_upgraded}}"
             - name: add the mysql long name to hiera data for the upgrade
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: set.yml
               vars:
                 tripleo_upgrade_key: mysql_node_names_override
                 tripleo_upgrade_value: "{{mysql_node_names_upgraded}}"
             - name: remove the extra hiera data needed for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: remove.yml
               vars:
                 tripleo_upgrade_key: "{{item}}"
@@ -606,34 +660,10 @@ outputs:
           block:
             - name: Transfer mysql data
               include_role:
-                name: tripleo-transfer
+                name: tripleo_transfer
               vars:
                 tripleo_transfer_src_dir: /var/lib/mysql
                 tripleo_transfer_src_host: "{{hostvars[groups['overcloud'][0]]['mysql_short_node_names'][1]}}"
                 tripleo_transfer_dest_dir: /var/lib/mysql
                 tripleo_transfer_dest_host: "{{hostvars[groups['overcloud'][0]]['mysql_short_bootstrap_node_name']}}"
                 tripleo_transfer_flag_file: /var/lib/tripleo/transfer-flags/var-lib-mysql
-
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 6
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-          block:
-            - name: Remove whitespaces in .my.cnf
-              replace:
-                path: /root/.my.cnf
-                regexp: '^ +'
-                replace: ''
-            - name: Create cell0 db
-              mysql_db:
-                name: nova_cell0
-                state: present
-                login_unix_socket: '/var/lib/mysql/mysql.sock'
-            - name: Grant access to cell0 db
-              mysql_user:
-                name: nova
-                host_all: yes
-                state: present
-                priv: '*.*:ALL'
-                login_unix_socket: '/var/lib/mysql/mysql.sock'

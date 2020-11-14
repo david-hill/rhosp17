@@ -65,6 +65,15 @@ outputs:
     description: Role data for the qdrouterd service.
     value:
       service_name: oslo_messaging_rpc
+      firewall_rules:
+        '109 qdrouterd':
+          dport:
+            - {get_param: RpcPort}
+            - 31459
+            - 31460
+        '109 qdr':
+          dport:
+            - {get_param: RpcPort}
       global_config_settings:
         oslo_messaging_rpc_scheme: amqp
         oslo_messaging_rpc_user_name: {get_param: RpcUserName}
@@ -75,12 +84,6 @@ outputs:
         messaging_rpc_service_name: 'amqp'
         keystone::messaging::amqp::amqp_pre_settled: 'notify'
       config_settings:
-        tripleo::oslo_messaging_rpc::firewall_rules:
-          '109 qdrouterd':
-            dport:
-              - {get_param: RpcPort}
-              - 31459
-              - 31460
         qdr::listener_addr:
           str_replace:
             template:
@@ -90,16 +93,12 @@ outputs:
         tripleo::profile::base::qdr::qdr_listener_port: {get_param: RpcPort}
         tripleo::profile::base::qdr::qdr_username: {get_param: RpcUserName}
         tripleo::profile::base::qdr::qdr_password: {get_param: RpcPassword}
-        tripleo::rabbitmq::firewall_rules:
-          '109 qdr':
-            dport:
-              - {get_param: RpcPort}
       service_config_settings: {}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: qdrouterd
         step_config: |
-          include ::tripleo::profile::base::qdr
+          include tripleo::profile::base::qdr
         config_image: {get_param: ContainerQdrouterdConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/qdrouterd.json:
@@ -138,7 +137,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/qdrouterd.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/qdrouterd/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/qdrouterd:/var/lib/kolla/config_files/src:ro
                   - /var/lib/qdrouterd:/var/lib/qdrouterd:z
                   - /var/log/containers/qdrouterd:/var/log/qdrouterd:z
             environment:
@@ -149,7 +148,8 @@ outputs:
           path: "{{ item.path }}"
           state: directory
           setype: "{{ item.setype }}"
+          mode: "{{ item.mode|default(omit) }}"
         with_items:
-          - { 'path': /var/log/containers/qdrouterd, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/lib/qdrouterd, 'setype': svirt_sandbox_file_t }
+          - { 'path': /var/log/containers/qdrouterd, 'setype': container_file_t, 'mode': '0750' }
+          - { 'path': /var/lib/qdrouterd, 'setype': container_file_t }
       metadata_settings: {}

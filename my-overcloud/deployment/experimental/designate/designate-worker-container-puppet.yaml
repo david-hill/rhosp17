@@ -79,12 +79,22 @@ outputs:
     description: Role data for the Designate Worker role.
     value:
       service_name: designate_worker
+      firewall_rules:
+        '140 designate_worker udp':
+          proto: 'udp'
+          dport:
+            - 53
+            - 953
+        '141 designate_worker tcp':
+          proto: 'tcp'
+          dport:
+            - 53
+            - 953
       monitoring_subscription: {get_param: MonitoringSubscriptionDesignateWorker}
       config_settings:
         map_merge:
           - get_attr: [DesignateBase, role_data, config_settings]
-          - designate::worker::worker_notify: true
-            designate_rndc_key: {get_param: DesignateRndcKey}
+          - designate_rndc_key: {get_param: DesignateRndcKey}
             dns::vardir: /var/named-persistent
             dns::recursion: 'no'
             # Because we generate the key locally and don't want the puppet
@@ -118,17 +128,6 @@ outputs:
                   "%{hiera('$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, DesignateApiNetwork]}
-            tripleo::designate_worker::firewall_rules:
-              '140 designate_worker udp':
-                proto: 'udp'
-                dport:
-                  - 53
-                  - 953
-              '141 designate_worker tcp':
-                proto: 'tcp'
-                dport:
-                  - 53
-                  - 953
           -
             if:
             - designate_workers_zero
@@ -199,7 +198,7 @@ outputs:
                 -
                   - /run:/run
                   - /var/lib/kolla/config_files/designate_worker.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/designate/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/designate:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/designate:/var/log/designate:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -214,7 +213,7 @@ outputs:
                 -
                   - /run:/run
                   - /var/lib/kolla/config_files/designate_backend_bind9.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/designate/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/designate:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/designate:/var/log/designate:z
                   - /var/named-persistent:/var/named-persistent:z
             environment:
@@ -225,18 +224,11 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/designate, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/designate, 'setype': svirt_sandbox_file_t }
-        - name: designate logs readme
-          copy:
-            dest: /var/log/designate/readme.txt
-            content: |
-              Log files from designate containers can be found under
-              /var/log/containers/designate.
-          ignore_errors: true
+            - { 'path': /var/log/containers/designate, 'setype': container_file_t, 'mode': '0750' }
         - name: create persistent named directory
           file:
             path: /var/named-persistent
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t

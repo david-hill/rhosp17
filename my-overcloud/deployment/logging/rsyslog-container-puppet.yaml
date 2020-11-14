@@ -53,6 +53,14 @@ parameters:
     default: ''
     description: Contains content of the private key corresponding to the cert RsyslogElasticsearchTlsClientCert.
     type: string
+  CloudName:
+    default: overcloud.localdomain
+    description: The DNS name of this cloud. E.g. ci-overcloud.tripleo.org
+    type: string
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
 
 resources:
   ContainersCommon:
@@ -136,6 +144,7 @@ outputs:
                 - property:
                     outname: '@timestamp'
                     name: timereported
+                    dateFormat: 'rfc3339'
                     format: jsonf
                 - property:
                     outname: host
@@ -143,7 +152,7 @@ outputs:
                     format: jsonf
                 - property:
                     outname: severity
-                    name: syslogseverity-text
+                    name: syslogseverity
                     format: jsonf
                 - property:
                     outname: facility
@@ -161,6 +170,19 @@ outputs:
                     outname: message
                     name: msg
                     format: jsonf
+                - property:
+                    outname: file
+                    name: '$!metadata!filename'
+                    format: jsonf
+                - constant:
+                    outname: cloud
+                    value: {get_param: CloudName}
+                    format: jsonf
+                - constant:
+                    outname: region
+                    value: {get_param: KeystoneRegion}
+                    format: jsonf
+
             tripleo::profile::base::logging::rsyslog::elasticsearch:
               map_merge:
                 - {get_param: RsyslogElasticsearchSetting}
@@ -178,7 +200,7 @@ outputs:
       puppet_config:
         config_volume: rsyslog
         puppet_tags: 'rsyslog::generate_concat,concat::fragment'
-        step_config: include ::tripleo::profile::base::logging::rsyslog
+        step_config: include tripleo::profile::base::logging::rsyslog
         config_image: {get_param: ContainerRsyslogConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/rsyslog.json:
@@ -209,7 +231,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/rsyslog.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/rsyslog/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/rsyslog:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers:/var/log/containers:ro
                   - /var/log/containers/rsyslog:/var/log/rsyslog:rw,z
                   - /var/log:/var/log/host:ro
@@ -221,17 +243,10 @@ outputs:
           file:
             path: /var/log/containers/rsyslog
             state: directory
-            setype: svirt_sandbox_file_t
+            setype: container_file_t
+            mode: '0750'
         - name: create persistent state directory for rsyslog
           file:
             path: /var/lib/rsyslog.container
             state: directory
-            setype: svirt_sandbox_file_t
-        - name: rsyslog logs readme
-          copy:
-            dest: /var/log/rsyslog/readme.txt
-            content: |
-              Log files from rsyslog containers can be found under
-              /var/log/containers/rsyslog. And its state is stored
-              under /var/lib/rsyslog.container.
-          ignore_errors: true
+            setype: container_file_t

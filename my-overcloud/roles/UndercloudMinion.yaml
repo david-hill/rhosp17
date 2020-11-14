@@ -7,6 +7,7 @@
     and ironic-conductor via heat using the 'openstack undercloud
     minion deploy' command.
   CountDefault: 1
+  default_route_networks: []
   tags:
     - primary
   ServicesDefault:
@@ -20,6 +21,7 @@
     - OS::TripleO::Services::MySQLClient
     - OS::TripleO::Services::OpenStackClients
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Sshd
     - OS::TripleO::Services::Timesync

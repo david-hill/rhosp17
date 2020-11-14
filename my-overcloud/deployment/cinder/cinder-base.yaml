@@ -22,6 +22,11 @@ parameters:
     type: string
     constraints:
       - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -48,50 +53,54 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
   CinderCronDbPurgeMinute:
     type: string
     description: >
-        Cron to move deleted instances to another table - Minute
+        Cron to purge db entries marked as deleted and older than $age - Minute
     default: '1'
   CinderCronDbPurgeHour:
     type: string
     description: >
-        Cron to move deleted instances to another table - Hour
+        Cron to purge db entries marked as deleted and older than $age - Hour
     default: '0'
   CinderCronDbPurgeMonthday:
     type: string
     description: >
-        Cron to move deleted instances to another table - Month Day
+        Cron to purge db entries marked as deleted and older than $age - Month Day
     default: '*'
   CinderCronDbPurgeMonth:
     type: string
     description: >
-        Cron to move deleted instances to another table - Month
+        Cron to purge db entries marked as deleted and older than $age - Month
     default: '*'
   CinderCronDbPurgeWeekday:
     type: string
     description: >
-        Cron to move deleted instances to another table - Week Day
+        Cron to purge db entries marked as deleted and older than $age - Week Day
     default: '*'
   CinderCronDbPurgeUser:
     type: string
     description: >
-        Cron to move deleted instances to another table - User
+        Cron to purge db entries marked as deleted and older than $age - User
     default: 'cinder'
   CinderCronDbPurgeAge:
     type: string
     description: >
-        Cron to move deleted instances to another table - Age
+        Cron to purge db entries marked as deleted and older than $age - Age
     default: '30'
   CinderCronDbPurgeDestination:
     type: string
     description: >
-        Cron to move deleted instances to another table - Log destination
+        Cron to purge db entries marked as deleted and older than $age - Log destination
     default: '/var/log/cinder/cinder-rowsflush.log'
   CinderCronDbPurgeMaxDelay:
     type: string
     description: >
-        Cron to move deleted instances to another table - Max Delay
+        Cron to purge db entries marked as deleted and older than $age - Max Delay
     default: '3600'
   NovaPassword:
     type: string
@@ -100,6 +109,7 @@ parameters:
 
 conditions:
   service_debug_unset: {equals : [{get_param: CinderDebug}, '']}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 outputs:
   role_data:
@@ -115,8 +125,18 @@ outputs:
             host: {get_param: [EndpointMap, MysqlInternal, host]}
             path: /cinder
             query:
-              read_default_file: /etc/my.cnf.d/tripleo.cnf
-              read_default_group: tripleo
+                if:
+                  - enable_sqlalchemy_collectd
+                  -
+                      read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+                      plugin: collectd
+                      collectd_program_name: cinder
+                      collectd_host: localhost
+                  -
+                      read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+
         cinder::logging::debug:
           if:
           - service_debug_unset
@@ -134,15 +154,17 @@ outputs:
         cinder::cron::db_purge::user: {get_param: CinderCronDbPurgeUser}
         cinder::cron::db_purge::age: {get_param: CinderCronDbPurgeAge}
         cinder::cron::db_purge::destination: {get_param: CinderCronDbPurgeDestination}
-        cinder::cron::db_purge::max_delay: {get_param: CinderCronDbPurgeMaxDelay}
+        cinder::cron::db_purge::maxdelay: {get_param: CinderCronDbPurgeMaxDelay}
         cinder::glance::glance_api_servers: {get_param: [EndpointMap, GlanceInternal, uri]}
         cinder::keystone::service_user::send_service_user_token: true
         cinder::keystone::service_user::project_name: service
         cinder::keystone::service_user::auth_type: password
         cinder::keystone::service_user::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri]}
         cinder::keystone::service_user::password: {get_param: CinderPassword}
+        cinder::keystone::service_user::region_name: {get_param: KeystoneRegion}
         cinder::nova::interface: admin
         cinder::nova::project_name: service
         cinder::nova::auth_type: password
         cinder::nova::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri]}
         cinder::nova::password: {get_param: NovaPassword}
+        cinder::nova::region_name: {get_param: KeystoneRegion}

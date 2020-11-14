@@ -1,6 +1,4 @@
 resource_registry:
-  OS::TripleO::Controller::Net::SoftwareConfig: ../common/net-config-multinode.yaml
-  OS::TripleO::Compute::Net::SoftwareConfig: ../common/net-config-multinode.yaml
   OS::TripleO::Services::CephMgr: ../../deployment/ceph-ansible/ceph-mgr.yaml
   OS::TripleO::Services::CephMon: ../../deployment/ceph-ansible/ceph-mon.yaml
   OS::TripleO::Services::CephOSD: ../../deployment/ceph-ansible/ceph-osd.yaml
@@ -10,8 +8,6 @@ resource_registry:
   OS::TripleO::Services::PacemakerRemote: ../../deployment/pacemaker/pacemaker-remote-baremetal-puppet.yaml
   OS::TripleO::Services::Clustercheck: ../../deployment/pacemaker/clustercheck-container-puppet.yaml
   OS::TripleO::Services::MySQL: ../../deployment/database/mysql-pacemaker-puppet.yaml
-  OS::TripleO::Services::Keepalived: OS::Heat::None
-  OS::TripleO::AllNodes::Validation: ../common/all-nodes-validation-disabled.yaml
   OS::TripleO::Services::OctaviaApi: ../../deployment/octavia/octavia-api-container-puppet.yaml
   OS::TripleO::Services::OctaviaHousekeeping: ../../deployment/octavia/octavia-housekeeping-container-puppet.yaml
   OS::TripleO::Services::OctaviaHealthManager: ../../deployment/octavia/octavia-health-manager-container-puppet.yaml
@@ -29,17 +25,19 @@ resource_registry:
   OS::TripleO::Services::SwiftStorage: OS::Heat::None
 
 parameter_defaults:
+  ControllerNetworkConfigTemplate: 'templates/ci/multinode.j2'
+  ComputeNetworkConfigTemplate: 'templates/ci/multinode.j2'
   ControllerServices:
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::Clustercheck
     - OS::TripleO::Services::ContainerImagePrepare
-    - OS::TripleO::Services::Docker
+    - OS::TripleO::Services::Podman
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::Keystone
     - OS::TripleO::Services::GlanceApi
     - OS::TripleO::Services::MySQL
     - OS::TripleO::Services::MySQLClient
-    - OS::TripleO::Services::NeutronServer
+    - OS::TripleO::Services::NeutronApi
     - OS::TripleO::Services::NeutronCorePlugin
     - OS::TripleO::Services::OVNDBs
     - OS::TripleO::Services::OVNController
@@ -52,7 +50,6 @@ parameter_defaults:
     - OS::TripleO::Services::OsloMessagingRpc
     - OS::TripleO::Services::OsloMessagingNotify
     - OS::TripleO::Services::HAproxy
-    - OS::TripleO::Services::Keepalived
     - OS::TripleO::Services::Memcached
     - OS::TripleO::Services::Pacemaker
     - OS::TripleO::Services::NovaConductor
@@ -77,7 +74,7 @@ parameter_defaults:
     - OS::TripleO::Services::Multipathd
   ControllerExtraConfig:
     nova::compute::libvirt::services::libvirt_virt_type: qemu
-    nova::compute::libvirt::libvirt_virt_type: qemu
+    nova::compute::libvirt::virt_type: qemu
     octavia::controller::connection_retry_interval: 10
   Debug: true
   CephAnsibleDisksConfig:
@@ -107,9 +104,8 @@ parameter_defaults:
   # a production deployment. What is here is suitable for
   # developer and CI testing only.
   CephClusterFSID: '4b5c8c0a-ff60-454b-a1b4-9747aa737d19'
+  CephAnsibleRepo: "tripleo-centos-ceph-nautilus"
   CephClusterName: mycephcluster
-  CephMonKey: 'AQC+Ox1VmEr3BxAALZejqeHj50Nj6wJDvs96OQ=='
-  CephAdminKey: 'AQDLOh1VgEp6FRAAFzT7Zw+Y9V6JJExQAsRnRQ=='
   CephClientKey: 'AQC+vYNXgDAgAhAAc8UoYt+OTz5uhV7ItLdwUw=='
   NovaEnableRbdBackend: true
   CeilometerEnableGnocchi: true
@@ -122,5 +118,4 @@ parameter_defaults:
   # For now, we hardcode it but soon it'll be generated in tripleo-common
   OctaviaCaKeyPassphrase: 'upstreamci'
   OctaviaGenerateCerts: true
-  # Remove ContainerCli once this scenario is tested on CentOS8
-  ContainerCli: docker
+  ContainerCli: podman

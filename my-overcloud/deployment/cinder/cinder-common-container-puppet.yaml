@@ -1,9 +1,8 @@
 heat_template_version: rocky
 
 description: >
-  Provides the list of Docker volumes and environment to be used by the
-  CinderVolume and CinderBackup services. The same list is used for
-  HA and non-HA deployments.
+  Provides the list of common container volumes and environment used by
+  various cinder services.
 
 parameters:
   EndpointMap:
@@ -52,10 +51,33 @@ parameters:
     default: false
     description: Whether to enable the multipath daemon
     type: boolean
+  CinderVolumeCluster:
+    default: ''
+    description: >
+      The cluster name used for deploying the cinder-volume service in an
+      active-active (A/A) configuration. This configuration requires the
+      Cinder backend drivers support A/A, and the cinder-volume service not
+      be managed by pacemaker. If these criteria are not met then the cluster
+      name must be left blank.
+    type: string
+  EnableInternalTLS:
+    type: boolean
+    default: false
+  EnableEtcdInternalTLS:
+    description: Controls whether etcd and the cinder-volume service use TLS
+                 for cinder's lock manager, even when the rest of the internal
+                 API network is using TLS.
+    type: boolean
+    default: false
 
 conditions:
 
   multipathd_enabled: {equals: [{get_param: MultipathdEnable}, true]}
+  cvol_active_active_tls_enabled:
+    and:
+      - not: {equals: [{get_param: CinderVolumeCluster}, '']}
+      - equals: [{get_param: EnableInternalTLS}, true]
+      - equals: [{get_param: EnableEtcdInternalTLS}, true]
 
 resources:
 
@@ -71,21 +93,30 @@ outputs:
           path: "{{ item.path }}"
           state: directory
           setype: "{{ item.setype }}"
+          mode: "{{ item.mode|default(omit) }}"
         with_items:
-          - { 'path': /var/log/containers/cinder, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/lib/cinder, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/cinder, 'setype': svirt_sandbox_file_t }
-      - name: cinder logs readme
-        copy:
-          dest: /var/log/cinder/readme.txt
-          content: |
-            Log files from cinder containers can be found under
-            /var/log/containers/cinder and /var/log/containers/httpd/cinder-api.
-        ignore_errors: true
+          - { 'path': /var/log/containers/cinder, 'setype': container_file_t, 'mode': '0750' }
+          - { 'path': /var/lib/cinder, 'setype': container_file_t }
       - name: ensure ceph configurations exist
         file:
           path: /etc/ceph
           state: directory
+
+  cinder_common_volumes:
+    description: Common volumes for all cinder services
+    value: &cinder_common_volumes
+      list_concat:
+        - {get_attr: [ContainersCommon, volumes]}
+        -
+          - /var/lib/config-data/puppet-generated/cinder:/var/lib/kolla/config_files/src:ro
+          - /var/log/containers/cinder:/var/log/cinder:z
+        -
+          if:
+            - cvol_active_active_tls_enabled
+            -
+              - /etc/pki/tls/certs/etcd.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/etcd.crt:ro
+              - /etc/pki/tls/private/etcd.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/etcd.key:ro
+            - []
 
   cinder_volume_host_prep_tasks:
     description: Host prep tasks for the cinder-volume service (HA or non-HA)
@@ -114,36 +145,51 @@ outputs:
                     - 'M'
                 args:
                   creates: /var/lib/cinder/cinder-volumes
-              - name: cinder create LVM volume group
-                shell: |
-                  if ! losetup /dev/loop2; then
-                    losetup /dev/loop2 /var/lib/cinder/cinder-volumes
+              - name: Get or create LVM loopback device
+                shell: |-
+                  exit_code=0
+                  existing_device=$(losetup -j /var/lib/cinder/cinder-volumes -l -n -O NAME)
+                  if [[ -z "${existing_device}" ]]; then
+                      losetup -f /var/lib/cinder/cinder-volumes --show
+                      exit_code=2
+                  else
+                      echo ${existing_device%$'\n'*}
                   fi
-                  if ! pvdisplay | grep cinder-volumes; then
-                    pvcreate /dev/loop2
-                  fi
-                  if ! vgdisplay | grep cinder-volumes; then
-                    vgcreate cinder-volumes /dev/loop2
-                  fi
+                  exit ${exit_code}
                 args:
                   executable: /bin/bash
-                  creates: /dev/loop2
+                register: _loopback_device
+                changed_when: _loopback_device.rc == 2
+                failed_when: _loopback_device.rc not in [0,2]
+              - name: Create LVM volume group
+                lvg:
+                  vg: "cinder-volumes"
+                  pvs: "{{ _loopback_device.stdout }}"
+                  state: present
+                when:
+                  - not (ansible_check_mode | bool)
               - name: cinder create service to run losetup for LVM on startup
                 copy:
                   dest: /etc/systemd/system/cinder-lvm-losetup.service
                   content: |
                     [Unit]
                     Description=Cinder LVM losetup
-                    After=syslog.target
+                    DefaultDependencies=no
+                    Conflicts=umount.target
+                    Requires=systemd-udev-settle.service
+                    Before=local-fs.target umount.target
+                    After=systemd-udev-settle.service
 
                     [Service]
                     Type=oneshot
-                    ExecStart=/bin/bash -c '/sbin/losetup /dev/loop2 || /sbin/losetup /dev/loop2 /var/lib/cinder/cinder-volumes'
-                    ExecStop=/bin/bash -c '/sbin/losetup -d /dev/loop2'
+                    ExecStart=/sbin/losetup {{ _loopback_device.stdout }} /var/lib/cinder/cinder-volumes
+                    ExecStop=/sbin/losetup -d {{ _loopback_device.stdout }}
                     RemainAfterExit=yes
 
                     [Install]
-                    WantedBy=multi-user.target
+                    WantedBy=local-fs-pre.target
+                when:
+                  - not (ansible_check_mode | bool)
               - name: cinder enable the LVM losetup service
                 systemd:
                   name: cinder-lvm-losetup
@@ -154,11 +200,10 @@ outputs:
     description: Volumes for the cinder-volume container (HA or non-HA)
     value:
       list_concat:
-        - {get_attr: [ContainersCommon, volumes]}
+        - *cinder_common_volumes
         - {get_param: CinderVolumeOptVolumes}
         -
           - /var/lib/kolla/config_files/cinder_volume.json:/var/lib/kolla/config_files/config.json:ro
-          - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
           - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
           - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
           - /lib/modules:/lib/modules:ro
@@ -167,7 +212,6 @@ outputs:
           - /sys:/sys
           - /var/lib/cinder:/var/lib/cinder:z
           - /var/lib/iscsi:/var/lib/iscsi:z
-          - /var/log/containers/cinder:/var/log/cinder:z
         -
           if:
           - multipathd_enabled
@@ -190,10 +234,9 @@ outputs:
     description: Volumes for the cinder-backup container (HA or non-HA)
     value:
       list_concat:
-        - {get_attr: [ContainersCommon, volumes]}
+        - *cinder_common_volumes
         -
           - /var/lib/kolla/config_files/cinder_backup.json:/var/lib/kolla/config_files/config.json:ro
-          - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
           - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
           - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
           - /dev/:/dev/
@@ -202,7 +245,6 @@ outputs:
           - /lib/modules:/lib/modules:ro
           - /var/lib/cinder:/var/lib/cinder:z
           - /var/lib/iscsi:/var/lib/iscsi:z
-          - /var/log/containers/cinder:/var/log/cinder:z
         -
           if:
           - multipathd_enabled

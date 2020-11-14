@@ -41,6 +41,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   HeatEngineOptVolumes:
     default: []
     description: list of optional volumes to be mounted
@@ -54,6 +60,11 @@ parameters:
     default: true
     description: |
         Whether to create cron job for purging soft deleted rows in the Heat database.
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   HeatWorkers:
     default: 0
     description: Number of workers for Heat service.
@@ -101,9 +112,14 @@ parameters:
     type: boolean
     default: false
     description: Create delegated roles
+  ClientRetryLimit:
+    type: number
+    default: 2
+    description: Client retries for transient errors.
 
 conditions:
   heat_workers_unset: {equals : [{get_param: HeatWorkers}, 0]}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
 
@@ -153,6 +169,7 @@ outputs:
                 port: {get_param: [EndpointMap, HeatCfnPublic, port]}
                 path: /v1/waitcondition
             heat::engine::convergence_engine: {get_param: HeatConvergenceEngine}
+            heat::engine::client_retry_limit: {get_param: ClientRetryLimit}
             tripleo::profile::base::heat::manage_db_purge: {get_param: HeatEnableDBPurge}
             heat::database_connection:
               make_url:
@@ -162,8 +179,18 @@ outputs:
                 host: {get_param: [EndpointMap, MysqlInternal, host]}
                 path: /heat
                 query:
-                  read_default_file: /etc/my.cnf.d/tripleo.cnf
-                  read_default_group: tripleo
+                  if:
+                    - enable_sqlalchemy_collectd
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+                        plugin: collectd
+                        collectd_program_name: heat
+                        collectd_host: localhost
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+
             heat::keystone_ec2_uri:
               list_join:
               - ''
@@ -195,10 +222,6 @@ outputs:
           heat::db::mysql::allowed_hosts:
             - '%'
             - "%{hiera('mysql_bind_host')}"
-        keystone:
-          map_merge:
-            - get_attr: [HeatBase, role_data, service_config_settings, keystone]
-            - tripleo::profile::base::keystone::heat_admin_password: {get_param: HeatStackDomainAdminPassword}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: heat
@@ -206,7 +229,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::heat::engine
+            - - include tripleo::profile::base::heat::engine
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerHeatConfigImage}
       kolla_config:
@@ -244,6 +267,8 @@ outputs:
                   - /var/lib/config-data/heat/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
                   - /var/lib/config-data/heat/etc/heat/:/etc/heat/:ro
             command: "/usr/bin/bootstrap_host_exec heat_engine su heat -s /bin/bash -c 'heat-manage db_sync'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           heat_engine:
             image: *heat_engine_image
@@ -259,7 +284,7 @@ outputs:
                 - {get_param: HeatEngineOptVolumes}
                 -
                   - /var/lib/kolla/config_files/heat_engine.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/heat/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/heat:/var/lib/kolla/config_files/src:ro
             environment:
               map_merge:
                 - {get_param: HeatEngineOptEnvVars}
@@ -283,26 +308,8 @@ outputs:
           block:
             - name: Stop heat engine container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - heat_engine
                 tripleo_delegate_to: "{{ groups['heat_engine'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-heat-engine is enabled
-              command: systemctl is-enabled --quiet openstack-heat-engine
-              ignore_errors: True
-              register: heat_engine_enabled_result
-            - name: Set fact heat_engine_enabled
-              set_fact:
-                heat_engine_enabled: "{{ heat_engine_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-heat-engine service
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - heat_engine_enabled|bool
-          service: name=openstack-heat-engine state=stopped enabled=no

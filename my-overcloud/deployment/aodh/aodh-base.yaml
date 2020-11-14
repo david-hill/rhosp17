@@ -48,17 +48,23 @@ parameters:
     type: string
     constraints:
       - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   KeystoneRegion:
     type: string
     default: 'regionOne'
     description: Keystone region for endpoint
   NotificationDriver:
     type: string
-    default: 'messagingv2'
+    default: 'noop'
     description: Driver or drivers to handle sending notifications.
 
 conditions:
   service_debug_unset: {equals : [{get_param: AodhDebug}, '']}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 outputs:
   role_data:
@@ -75,8 +81,18 @@ outputs:
             host: {get_param: [EndpointMap, MysqlInternal, host]}
             path: /aodh
             query:
-              read_default_file: /etc/my.cnf.d/tripleo.cnf
-              read_default_group: tripleo
+                if:
+                  - enable_sqlalchemy_collectd
+                  -
+                      read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+                      plugin: collectd
+                      collectd_program_name: aodh
+                      collectd_host: localhost
+                  -
+                      read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+
         aodh::logging::debug:
           if:
           - service_debug_unset
@@ -89,19 +105,13 @@ outputs:
         aodh::keystone::authtoken::project_domain_name: 'Default'
         aodh::keystone::authtoken::password: {get_param: AodhPassword}
         aodh::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
-        aodh::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
         aodh::keystone::authtoken::auth_url: { get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
+        aodh::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+        aodh::keystone::authtoken::interface: 'internal'
         aodh::auth::auth_password: {get_param: AodhPassword}
         aodh::auth::auth_region: {get_param: KeystoneRegion}
-        aodh::auth::auth_tenant_name: 'service'
+        aodh::auth::auth_project_name: 'service'
       service_config_settings:
-        keystone:
-          aodh::keystone::auth::public_url: {get_param: [EndpointMap, AodhPublic, uri]}
-          aodh::keystone::auth::internal_url: {get_param: [EndpointMap, AodhInternal, uri]}
-          aodh::keystone::auth::admin_url: {get_param: [EndpointMap, AodhAdmin, uri]}
-          aodh::keystone::auth::password: {get_param: AodhPassword}
-          aodh::keystone::auth::region: {get_param: KeystoneRegion}
-          aodh::keystone::auth::tenant: 'service'
         mysql:
           aodh::db::mysql::user: aodh
           aodh::db::mysql::password: {get_param: AodhPassword}

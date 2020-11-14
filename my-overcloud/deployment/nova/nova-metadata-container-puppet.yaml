@@ -119,6 +119,11 @@ outputs:
     description: Role data for the Nova Metadata service.
     value:
       service_name: nova_metadata
+      firewall_rules:
+        '139 nova_metadata':
+          dport:
+            - 8775
+            - 13775
       monitoring_subscription: {get_param: MonitoringSubscriptionNovaMetadata}
       config_settings:
         map_merge:
@@ -126,18 +131,12 @@ outputs:
           - get_attr: [ApacheServiceBase, role_data, config_settings]
           - get_attr: [NovaMetadataLogging, config_settings]
           - apache::default_vhost: false
-          - tripleo::nova_metadata::firewall_rules:
-              '139 nova_metadata':
-                dport:
-                  - 8775
-                  - 13775
-            nova::keystone::authtoken::project_name: 'service'
+          - nova::keystone::authtoken::project_name: 'service'
             nova::keystone::authtoken::password: {get_param: NovaPassword}
-            nova::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
+            nova::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             nova::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneAdmin, uri_no_suffix]}
             nova::keystone::authtoken::region_name: {get_param: KeystoneRegion}
-            nova::metadata::enable_proxy_headers_parsing: true
-            nova_metadata_wsgi_enabled: true
+            nova::keystone::authtoken::interface: 'internal'
             nova::wsgi::apache_metadata::api_port: '8775'
             nova::wsgi::apache_metadata::ssl: {get_param: EnableInternalTLS}
             nova::metadata::local_metadata_per_cell: {get_param: NovaLocalMetadataPerCell}
@@ -172,13 +171,6 @@ outputs:
         rsyslog:
           tripleo_logging_sources_nova_metadata:
             - {get_param: NovaMetadataLoggingSource}
-        keystone:
-          nova::keystone::auth::tenant: 'service'
-          nova::keystone::auth::public_url: {get_param: [EndpointMap, NovaPublic, uri]}
-          nova::keystone::auth::internal_url: {get_param: [EndpointMap, NovaInternal, uri]}
-          nova::keystone::auth::admin_url: {get_param: [EndpointMap, NovaAdmin, uri]}
-          nova::keystone::auth::password: {get_param: NovaPassword}
-          nova::keystone::auth::region: {get_param: KeystoneRegion}
         mysql:
           map_merge:
             - {get_attr: [NovaBase, role_data, service_config_settings, mysql]}
@@ -207,6 +199,13 @@ outputs:
               dest: "/etc/httpd/conf.d"
               merge: false
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
+              merge: false
+              preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -233,42 +232,34 @@ outputs:
                 - {get_attr: [NovaMetadataLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/nova_metadata.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/nova_metadata/:/var/lib/kolla/config_files/src:ro
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                  - /var/lib/config-data/puppet-generated/nova_metadata:/var/lib/kolla/config_files/src:ro
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       deploy_steps_tasks:
-        - name: validate nova metadata container state
+        - name: validate nova-metadata container state
+          podman_container_info:
+            name: nova_metadata
+          register: nova_metadata_infos
+          failed_when:
+            - nova_metadata_infos.containers.0.Healthcheck.Status is defined
+            - "'healthy' not in nova_metadata_infos.containers.0.Healthcheck.Status"
+          retries: 10
+          delay: 30
+          tags:
+            - opendev-validation
+            - opendev-validation-nova
           when:
             - container_cli == 'podman'
             - not container_healthcheck_disabled
             - step|int == 5
-          tags:
-            - opendev-validation
-            - opendev-validation-nova
-          block:
-            - name: Get nova-metadata healthcheck status
-              register: nova_metadata_healthcheck_state
-              systemd:
-                name: tripleo_nova_metadata_healthcheck
-              retries: 10
-              delay: 30
-              until: nova_metadata_healthcheck_state.status.ExecMainPID != '0' and
-                nova_metadata_healthcheck_state.status.ActiveState in ['inactive', 'failed']
-              ignore_errors: yes
-            - name: Fail if nova-metadata healthcheck report failed status
-              fail:
-                msg: nova-metadata isn't working (healthcheck failed)
-              when: nova_metadata_healthcheck_state.status.ExecMainStatus != '0'
       host_prep_tasks: {get_attr: [NovaMetadataLogging, host_prep_tasks]}
       external_upgrade_tasks:
         - when:
@@ -280,7 +271,7 @@ outputs:
           block:
             - name: Stop nova metadata container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - nova_metadata

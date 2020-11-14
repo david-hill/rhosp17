@@ -100,17 +100,28 @@ outputs:
     description: Role data for the Heat API CFN role.
     value:
       service_name: heat_api_cfn
+      firewall_rules:
+        '125 heat_cfn':
+          dport:
+            - 8000
+            - 13800
+      keystone_resources:
+        heat-cfn:
+          endpoints:
+            public: {get_param: [EndpointMap, HeatCfnPublic, uri]}
+            internal: {get_param: [EndpointMap, HeatCfnInternal, uri]}
+            admin: {get_param: [EndpointMap, HeatCfnAdmin, uri]}
+          users:
+            heat-cfn:
+              password: {get_param: HeatPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'cloudformation'
       monitoring_subscription: {get_param: MonitoringSubscriptionHeatApiCnf}
       config_settings:
         map_merge:
           - get_attr: [HeatBase, role_data, config_settings]
           - get_attr: [HeatApiCfnLogging, config_settings]
           - apache::default_vhost: false
-            tripleo::heat_api_cfn::firewall_rules:
-              '125 heat_cfn':
-                dport:
-                  - 8000
-                  - 13800
             heat::api_cfn::bind_host:
               str_replace:
                 template:
@@ -145,21 +156,12 @@ outputs:
         rsyslog:
           tripleo_logging_sources_heat_api_cfn:
             - {get_param: HeatApiCfnLoggingSource}
-        keystone:
-          map_merge:
-            - get_attr: [HeatBase, role_data, service_config_settings, keystone]
-            - heat::keystone::auth_cfn::tenant: 'service'
-              heat::keystone::auth_cfn::public_url: {get_param: [EndpointMap, HeatCfnPublic, uri]}
-              heat::keystone::auth_cfn::internal_url: {get_param: [EndpointMap, HeatCfnInternal, uri]}
-              heat::keystone::auth_cfn::admin_url: {get_param: [EndpointMap, HeatCfnAdmin, uri]}
-              heat::keystone::auth_cfn::password: {get_param: HeatPassword}
-              heat::keystone::auth_cfn::region: {get_param: KeystoneRegion}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: heat_api_cfn
         puppet_tags: heat_config,file,concat,file_line
         step_config: |
-          include ::tripleo::profile::base::heat::api_cfn
+          include tripleo::profile::base::heat::api_cfn
         config_image: {get_param: ContainerHeatApiCfnConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/heat_api_cfn.json:
@@ -167,6 +169,13 @@ outputs:
           config_files:
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
+              merge: false
+              preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -197,17 +206,15 @@ outputs:
                 - {get_attr: [HeatApiCfnLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/heat_api_cfn.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/heat_api_cfn/:/var/lib/kolla/config_files/src:ro
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                  - /var/lib/config-data/puppet-generated/heat_api_cfn:/var/lib/kolla/config_files/src:ro
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks: {get_attr: [HeatApiCfnLogging, host_prep_tasks]}
@@ -224,26 +231,8 @@ outputs:
           block:
             - name: Stop heat cfn container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - heat_api_cfn
                 tripleo_delegate_to: "{{ groups['heat_api_cfn'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-heat-api-cfn service is enabled
-              command: systemctl is-enabled openstack-heat-api-cfn
-              ignore_errors: True
-              register: heat_api_cfn_enabled_result
-            - name: Set fact heat_api_cfn_enabled
-              set_fact:
-                heat_api_cfn_enabled: "{{ heat_api_cfn_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-heat-api-cfn service
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - heat_api_cfn_enabled|bool
-          service: name=openstack-heat-api-cfn state=stopped enabled=no

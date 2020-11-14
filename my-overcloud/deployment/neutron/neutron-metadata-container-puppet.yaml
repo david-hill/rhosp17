@@ -189,7 +189,7 @@ outputs:
                 - {get_attr: [NeutronLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/neutron_metadata_agent.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/neutron/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
                   - /lib/modules:/lib/modules:ro
                   - /var/lib/neutron:/var/lib/neutron:shared,z
             environment:
@@ -203,28 +203,41 @@ outputs:
               file:
                 path: /var/lib/neutron
                 state: directory
-                setype: svirt_sandbox_file_t
-          - - name: enable virt_sandbox_use_netlink for healtcheck
+                setype: container_file_t
+            - name: enable virt_sandbox_use_netlink for healthcheck
               seboolean:
                 name: virt_sandbox_use_netlink
                 persistent: yes
                 state: yes
       upgrade_tasks: []
-      fast_forward_upgrade_tasks:
+      post_upgrade_tasks:
+        - name: Check for neutron user
+          getent:
+            database: passwd
+            key: neutron
+            fail_key: false
+        - name: Set neutron_user_avail
+          set_fact:
+            neutron_user_avail: "{{ getent_passwd is defined }}"
         - when:
-            - step|int == 0
-            - release == 'ocata'
+            - step|int == 2
+            - neutron_user_avail|bool
           block:
-            - name: Check if neutron_metadata_agent is deployed
-              command: systemctl is-enabled --quiet neutron-metadata-agent
-              ignore_errors: True
-              register: neutron_metadata_agent_enabled_result
-            - name: Set fact neutron_metadata_agent_enabled
-              set_fact:
-                neutron_metadata_agent_enabled: "{{ neutron_metadata_agent_enabled_result.rc == 0 }}"
-        - name: Stop neutron_metadata_agent
-          service: name=neutron-metadata-agent state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - neutron_metadata_agent_enabled|bool
+            - name: Ensure r/w access for existing files after upgrade
+              become: true
+              shell: |
+                umask 0002
+                setfacl -d -R -m u:neutron:rwx /var/lib/neutron
+                setfacl -R -m u:neutron:rw /var/lib/neutron
+                find /var/lib/neutron -type d -exec setfacl -m u:neutron:rwx '{}' \;
+            - name: Provide access to domain sockets
+              become: true
+              shell: |
+                umask 0002
+                setfacl -m u:neutron:rwx "{{ item }}"
+              with_items:
+                - /var/lib/neutron/metadata_proxy
+                - /var/lib/neutron/keepalived-state-change
+                - /var/lib/neutron
+              # These files are not necessarily present
+              failed_when: false

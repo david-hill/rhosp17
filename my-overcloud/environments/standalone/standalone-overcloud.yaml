@@ -42,11 +42,17 @@ parameter_defaults:
   # Type: string
   StandaloneHostnameFormat: '%stackname%-standalone-%index%'
 
+  # Standalone NetworkConfigTemplate
+  # Type: string
+  StandaloneNetworkConfigTemplate: templates/net_config_bridge.j2
+
   # How many replicas to use in the swift rings.
   # Type: number
   SwiftReplicas: 1
 
 resource_registry:
+  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
+  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -72,13 +78,12 @@ resource_registry:
   OS::TripleO::Services::HeatApiCfn: OS::Heat::None
   OS::TripleO::Services::HeatApiCloudwatch: OS::Heat::None
   OS::TripleO::Services::HeatEngine: OS::Heat::None
+  OS::TripleO::Services::IpaClient: OS::Heat::None
   OS::TripleO::Services::IronicApi: OS::Heat::None
   OS::TripleO::Services::IronicConductor: OS::Heat::None
   OS::TripleO::Services::IronicInspector: OS::Heat::None
   OS::TripleO::Services::IronicNeutronAgent: OS::Heat::None
   OS::TripleO::Services::IronicPxe: OS::Heat::None
-  OS::TripleO::Services::Kubernetes::Master: OS::Heat::None
-  OS::TripleO::Services::Kubernetes::Worker: OS::Heat::None
   OS::TripleO::Services::ManilaApi: OS::Heat::None
   OS::TripleO::Services::ManilaBackendCephFs: OS::Heat::None
   OS::TripleO::Services::ManilaBackendIsilon: OS::Heat::None
@@ -92,8 +97,7 @@ resource_registry:
   OS::TripleO::Services::MistralEngine: OS::Heat::None
   OS::TripleO::Services::MistralEventEngine: OS::Heat::None
   OS::TripleO::Services::MistralExecutor: OS::Heat::None
-  OS::TripleO::Services::OpenStackClients: ../../deployment/clients/openstack-clients-baremetal-puppet.yaml
+  OS::TripleO::Services::OpenStackClients: ../../deployment/clients/openstack-clients-baremetal-ansible.yaml
   OS::TripleO::Services::SaharaApi: OS::Heat::None
   OS::TripleO::Services::SaharaEngine: OS::Heat::None
   OS::TripleO::Services::Zaqar: OS::Heat::None
-  OS::TripleO::Standalone::Net::SoftwareConfig: ../../net-config-bridge.yaml

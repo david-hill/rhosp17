@@ -45,7 +45,7 @@ parameters:
     type: string
     default: 'daily'
     constraints:
-      - allowed_values: [ 'daily', 'weekly', 'monthly' ]
+      - allowed_values: [ 'hourly', 'daily', 'weekly', 'monthly' ]
   LogrotateRotate:
     description: Configures the rotate param for containerized logrotate.
     type: string
@@ -125,7 +125,7 @@ outputs:
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: crond
-        step_config: 'include ::tripleo::profile::base::logging::logrotate'
+        step_config: 'include tripleo::profile::base::logging::logrotate'
         config_image: {get_param: ContainerCrondConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/logrotate-crond.json:
@@ -151,7 +151,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/logrotate-crond.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/crond/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/crond:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers:/var/log/containers:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -165,7 +165,7 @@ outputs:
           block:
             - name: Stop logrotate container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - logrotate_crond

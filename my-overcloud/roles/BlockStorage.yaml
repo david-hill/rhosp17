@@ -4,6 +4,8 @@
 - name: BlockStorage
   description: |
     Cinder Block Storage node role
+  tags:
+    - storage
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -23,7 +25,6 @@
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::CinderBackendVRTSHyperScale
     - OS::TripleO::Services::Collectd
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
@@ -34,6 +35,7 @@
     - OS::TripleO::Services::MySQLClient
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar

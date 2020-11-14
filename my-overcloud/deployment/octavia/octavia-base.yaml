@@ -40,6 +40,11 @@ parameters:
     type: string
     constraints:
       - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   EnableConfigPurge:
     type: boolean
     default: false
@@ -48,7 +53,7 @@ parameters:
         configuration remnants after upgrades.
   NotificationDriver:
     type: string
-    default: 'messagingv2'
+    default: 'noop'
     description: Driver or drivers to handle sending notifications.
   OctaviaUserName:
     description: The username for the Octavia database and keystone accounts.
@@ -62,6 +67,10 @@ parameters:
     description: The project name for the keystone Octavia account.
     type: string
     default: 'service'
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
   OctaviaCaCertFile:
     type: string
     default: '/etc/octavia/certs/ca_01.pem'
@@ -83,6 +92,16 @@ parameters:
                  If provided, this will create or update a file on the host
                  with the path provided in OctaviaCaKeyFile with the key
                  data.
+  OctaviaClientCertFile:
+    type: string
+    default: '/etc/octavia/certs/client.pem'
+    description: Octavia client certificate for amphorae.
+  OctaviaClientCert:
+    type: string
+    default: ''
+    description: Octavia client certificate data. If provided, this will create
+                 or update a file on the host with the path provided in
+                 OctaviaClientCertFile with the certificate data.
   OctaviaServerCertsKeyPassphrase:
     constraints:
       - length: { min: 32, max: 32}
@@ -172,7 +191,7 @@ parameters:
                  to receive tenant traffic flow log messages.
     type: comma_delimited_list
   OctaviaTenantLogFacility:
-    default: 1
+    default: 0
     description: The syslog "LOG_LOCAL" facility to use for the tenant
                  traffic flow log messages.
     type: number
@@ -188,12 +207,18 @@ parameters:
     description: When true, logs will not be stored on the amphora filesystem.
                  This includes all kernel, system, and security logs.
     type: boolean
+  OctaviaAntiAffinity:
+    default: true
+    description: Flag to indicate if anti-affinity feature is turned on.
+    type: boolean
 
 conditions:
   service_debug_unset: {equals : [{get_param: OctaviaDebug}, '']}
   octavia_ca_cert_unset: {equals: [{get_param: OctaviaCaCert}, '']}
   octavia_ca_key_unset: {equals: [{get_param: OctaviaCaKey}, '']}
+  octavia_client_cert_unset: {equals: [{get_param: OctaviaClientCert}, '']}
   octavia_topology_unset: {equals : [{get_param: OctaviaLoadBalancerTopology}, ""]}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 outputs:
   role_data:
@@ -217,8 +242,18 @@ outputs:
                 host: {get_param: [EndpointMap, MysqlInternal, host]}
                 path: /octavia
                 query:
-                  read_default_file: /etc/my.cnf.d/tripleo.cnf
-                  read_default_group: tripleo
+                  if:
+                    - enable_sqlalchemy_collectd
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+                        plugin: collectd
+                        collectd_program_name: octavia
+                        collectd_host: localhost
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+
             octavia::service_auth::auth_url: {get_param: [EndpointMap, KeystoneV3Internal, uri]}
             octavia::service_auth::auth_type: 'password'
             octavia::service_auth::username: {get_param: OctaviaUserName}
@@ -226,9 +261,10 @@ outputs:
             octavia::service_auth::project_name: {get_param: OctaviaProjectName}
             octavia::service_auth::project_domain_name: 'Default'
             octavia::service_auth::user_domain_name: 'Default'
-            octavia::service_auth::auth_type: 'password'
+            octavia::service_auth::region_name: {get_param: KeystoneRegion}
             octavia::certificates::ca_certificate: {get_param: OctaviaCaCertFile}
             octavia::certificates::ca_private_key: {get_param: OctaviaCaKeyFile}
+            octavia::certificates::client_cert: {get_param: OctaviaClientCertFile}
             octavia::certificates::server_certs_key_passphrase: {get_param: OctaviaServerCertsKeyPassphrase}
             octavia::certificates::ca_private_key_passphrase: {get_param: OctaviaCaKeyPassphrase}
             octavia::controller::amp_boot_network_list: {get_param: OctaviaAmphoraNetworkList}
@@ -251,6 +287,7 @@ outputs:
             octavia::controller::user_log_facility: {get_param: OctaviaTenantLogFacility}
             octavia::controller::user_log_format: {get_param: OctaviaUserLogFormat}
             octavia::controller::disable_local_log_storage: {get_param: OctaviaDisableLocalLogStorage}
+            octavia::nova::enable_anti_affinity: {get_param: OctaviaAntiAffinity}
           -
             if:
             - octavia_topology_unset
@@ -266,3 +303,8 @@ outputs:
             - octavia_ca_key_unset
             - {}
             - octavia::certificates::ca_private_key_data: {get_param: OctaviaCaKey}
+          -
+            if:
+            - octavia_client_cert_unset
+            - {}
+            - octavia::certificates::client_cert_data: {get_param: OctaviaClientCert}

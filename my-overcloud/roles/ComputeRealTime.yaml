@@ -1,13 +1,16 @@
 ###############################################################################
-# Role: ComputeRealTime                                                               #
+# Role: ComputeRealTime                                                       #
 ###############################################################################
 - name: ComputeRealTime
   description: |
-    Compute role that is optimized for real-time behaviour. When using this role
-    it is mandatory that an overcloud-realtime-compute image is available and
-    the role specific parameters IsolCpusList and NovaVcpuPinSet are set
-    accordingly to the hardware of the real-time compute nodes.
+    Compute role that is optimized for real-time behaviour. When using this
+    role it is mandatory that an overcloud-realtime-compute image is available
+    and the role specific parameters IsolCpusList, NovaComputeCpuDedicatedSet,
+    and NovaComputeCpuSharedSet are set according to the hardware of the
+    real-time compute nodes.
   CountDefault: 1
+  tags:
+    - compute
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -19,10 +22,12 @@
   ImageDefault: overcloud-realtime-compute
   RoleParametersDefault:
     TunedProfileName: "realtime-virtual-host"
-    KernelArgs: ""      # these must be set in an environment file or similar
-    IsolCpusList: ""    # according to the hardware of real-time nodes
-    NovaVcpuPinSet: ""  #
+    KernelArgs: ""                  # these must be set in an environment file or
+    IsolCpusList: ""                # similar according to the hardware of
+    NovaComputeCpuDedicatedSet: ""  # real-time nodes
+    NovaComputeCpuSharedSet: ""     #
     NovaLibvirtMemStatsPeriodSeconds: 0
+    NovaComputeDisableIrqBalance: True
   update_serial: 25
   ServicesDefault:
     - OS::TripleO::Services::Aide
@@ -38,7 +43,6 @@
     - OS::TripleO::Services::ComputeNeutronL3Agent
     - OS::TripleO::Services::ComputeNeutronMetadataAgent
     - OS::TripleO::Services::ComputeNeutronOvsAgent
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
@@ -57,6 +61,7 @@
     - OS::TripleO::Services::NovaMigrationTarget
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar

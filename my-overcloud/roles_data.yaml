@@ -12,6 +12,9 @@
   tags:
     - primary
     - controller
+    # Create external Neutron bridge for SNAT (and floating IPs when using
+    # ML2/OVS without DVR)
+    - external_bridge
   networks:
     External:
       subnet: external_subnet
@@ -60,11 +63,16 @@
     - OS::TripleO::Services::CephRgw
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::CinderApi
-    - OS::TripleO::Services::CinderBackendDellPs
     - OS::TripleO::Services::CinderBackendDellSc
+    - OS::TripleO::Services::CinderBackendDellEMCPowerFlex
+    - OS::TripleO::Services::CinderBackendDellEMCPowermax
+    - OS::TripleO::Services::CinderBackendDellEMCPowerStore
+    - OS::TripleO::Services::CinderBackendDellEMCSc
     - OS::TripleO::Services::CinderBackendDellEMCUnity
     - OS::TripleO::Services::CinderBackendDellEMCVMAXISCSI
     - OS::TripleO::Services::CinderBackendDellEMCVNX
+    - OS::TripleO::Services::CinderBackendDellEMCVxFlexOS
+    - OS::TripleO::Services::CinderBackendDellEMCXtremio
     - OS::TripleO::Services::CinderBackendDellEMCXTREMIOISCSI
     - OS::TripleO::Services::CinderBackendNetApp
     - OS::TripleO::Services::CinderBackendPure
@@ -84,8 +92,6 @@
     - OS::TripleO::Services::DesignateWorker
     - OS::TripleO::Services::DesignateMDNS
     - OS::TripleO::Services::DesignateSink
-    - OS::TripleO::Services::Docker
-    - OS::TripleO::Services::Ec2Api
     - OS::TripleO::Services::Etcd
     - OS::TripleO::Services::ExternalSwiftProxy
     - OS::TripleO::Services::GlanceApi
@@ -106,7 +112,6 @@
     - OS::TripleO::Services::IronicPxe
     - OS::TripleO::Services::IronicNeutronAgent
     - OS::TripleO::Services::Iscsid
-    - OS::TripleO::Services::Keepalived
     - OS::TripleO::Services::Kernel
     - OS::TripleO::Services::Keystone
     - OS::TripleO::Services::LoginDefs
@@ -138,8 +143,6 @@
     - OS::TripleO::Services::NeutronL3Agent
     - OS::TripleO::Services::NeutronLinuxbridgeAgent
     - OS::TripleO::Services::NeutronMetadataAgent
-    - OS::TripleO::Services::NeutronML2FujitsuCfab
-    - OS::TripleO::Services::NeutronML2FujitsuFossw
     - OS::TripleO::Services::NeutronOvsAgent
     - OS::TripleO::Services::NeutronVppAgent
     - OS::TripleO::Services::NeutronAgentsIBConfig
@@ -163,6 +166,7 @@
     - OS::TripleO::Services::OsloMessagingRpc
     - OS::TripleO::Services::OsloMessagingNotify
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Redis
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
@@ -192,6 +196,7 @@
   CountDefault: 1
   # Create external Neutron bridge (unset if using ML2/OVS without DVR)
   tags:
+    - compute
     - external_bridge
   networks:
     InternalApi:
@@ -230,7 +235,6 @@
     - OS::TripleO::Services::ComputeNeutronL3Agent
     - OS::TripleO::Services::ComputeNeutronMetadataAgent
     - OS::TripleO::Services::ComputeNeutronOvsAgent
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
@@ -249,6 +253,7 @@
     - OS::TripleO::Services::NovaMigrationTarget
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar
@@ -269,6 +274,8 @@
 - name: BlockStorage
   description: |
     Cinder Block Storage node role
+  tags:
+    - storage
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -288,7 +295,6 @@
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::CinderBackendVRTSHyperScale
     - OS::TripleO::Services::Collectd
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
@@ -299,6 +305,7 @@
     - OS::TripleO::Services::MySQLClient
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar
@@ -316,6 +323,8 @@
 - name: ObjectStorage
   description: |
     Swift Object Storage node role
+  tags:
+    - storage
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -341,7 +350,6 @@
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Collectd
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Kernel
@@ -350,6 +358,7 @@
     - OS::TripleO::Services::MySQLClient
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar
@@ -370,6 +379,9 @@
 - name: CephStorage
   description: |
     Ceph OSD Storage node role
+  tags:
+    - ceph
+    - storage
   networks:
     Storage:
       subnet: storage_subnet
@@ -387,7 +399,6 @@
     - OS::TripleO::Services::CephOSD
     - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Collectd
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Kernel

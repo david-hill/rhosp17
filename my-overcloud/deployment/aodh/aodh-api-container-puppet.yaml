@@ -36,6 +36,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   EnableInternalTLS:
     type: boolean
     default: false
@@ -52,6 +58,14 @@ parameters:
       e.g. { aodh-context_is_admin: { key: context_is_admin, value: 'role:admin' } }
     default: {}
     type: json
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
+  AodhPassword:
+    description: The password for the aodh services.
+    type: string
+    hidden: true
 
 conditions:
 
@@ -91,6 +105,22 @@ outputs:
     description: Role data for the aodh API role.
     value:
       service_name: aodh_api
+      firewall_rules:
+        '128 aodh-api':
+          dport:
+            - 8042
+            - 13042
+      keystone_resources:
+        aodh:
+          endpoints:
+            public: {get_param: [EndpointMap, AodhPublic, uri]}
+            internal: {get_param: [EndpointMap, AodhInternal, uri]}
+            admin: {get_param: [EndpointMap, AodhAdmin, uri]}
+          users:
+            aodh:
+              password: {get_param: AodhPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'alarming'
       monitoring_subscription: {get_param: MonitoringSubscriptionAodhApi}
       config_settings:
         map_merge:
@@ -109,11 +139,6 @@ outputs:
             aodh::api::enable_proxy_headers_parsing: true
             aodh::api::gnocchi_external_project_owner: {get_param: GnocchiExternalProject}
             aodh::policy::policies: {get_param: AodhApiPolicies}
-            tripleo::aodh_api::firewall_rules:
-              '128 aodh-api':
-                dport:
-                  - 8042
-                  - 13042
             aodh::api::host:
               str_replace:
                 template:
@@ -151,6 +176,13 @@ outputs:
               dest: "/etc/httpd/conf.d"
               merge: false
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
+              merge: false
+              preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -186,6 +218,8 @@ outputs:
                   - /var/log/containers/aodh:/var/log/aodh
                   - /var/log/containers/httpd/aodh-api:/var/log/httpd
             command: "/usr/bin/bootstrap_host_exec aodh_api su aodh -s /bin/bash -c /usr/bin/aodh-dbsync"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           aodh_api:
             image: *aodh_api_image
@@ -199,19 +233,17 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/aodh_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/aodh/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/aodh:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/aodh:/var/log/aodh
                   - /var/log/containers/httpd/aodh-api:/var/log/httpd
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -220,17 +252,10 @@ outputs:
           path: "{{ item.path }}"
           setype: "{{ item.setype }}"
           state: directory
+          mode: "{{ item.mode|default(omit) }}"
         with_items:
-          - { 'path': /var/log/containers/aodh, 'setype': svirt_sandbox_file_t }
-          - { 'path': /var/log/containers/httpd/aodh-api, setype: svirt_sandbox_file_t }
-          - { 'path': /var/log/aodh, setype: svirt_sandbox_file_t }
-      - name: aodh logs readme
-        copy:
-          dest: /var/log/aodh/readme.txt
-          content: |
-            Log files from aodh containers can be found under
-            /var/log/containers/aodh and /var/log/containers/httpd/aodh-api.
-        ignore_errors: true
+          - { 'path': /var/log/containers/aodh, 'setype': container_file_t, 'mode': '0750' }
+          - { 'path': /var/log/containers/httpd/aodh-api, setype: container_file_t, 'mode': '0750' }
       metadata_settings:
         get_attr: [ApacheServiceBase, role_data, metadata_settings]
       external_upgrade_tasks:
@@ -243,53 +268,8 @@ outputs:
           block:
             - name: Stop aodh api container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - aodh_api
                 tripleo_delegate_to: "{{ groups['aodh_api'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check for aodh running under apache
-              tags: common
-              shell: "httpd -t -D DUMP_VHOSTS | grep -q aodh_wsgi"
-              ignore_errors: true
-              register: aodh_httpd_enabled_result
-            - name: Set fact aodh_httpd_enabled
-              set_fact:
-                aodh_httpd_enabled: "{{ aodh_httpd_enabled_result.rc == 0 }}"
-            - name: Check if httpd is running
-              ignore_errors: True
-              command: systemctl is-active --quiet httpd
-              register: httpd_running_result
-              when:
-                - httpd_running is undefined
-            - name: Set fact httpd_running if undefined
-              set_fact:
-                httpd_running: "{{ httpd_running_result.rc == 0 }}"
-              when:
-                - httpd_running is undefined
-        - name: Stop and disable aodh (under httpd)
-          service: name=httpd state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - aodh_httpd_enabled|bool
-            - httpd_running|bool
-        - name: Aodh package update
-          package:
-            name: 'openstack-aodh*'
-            state: latest
-          when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-            - aodh_httpd_enabled|bool
-        - name: aodh db sync
-          command: aodh-dbsync
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool
-            - aodh_httpd_enabled|bool

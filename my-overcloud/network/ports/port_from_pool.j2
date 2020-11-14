@@ -18,6 +18,10 @@ parameters:
     description: Name of the port
     default: ''
     type: string
+  DnsName:
+    description: DNS name of the port
+    default: ''
+    type: string
   FixedIPs:
     description: >
         Control the IP allocation for the VIP port. E.g.
@@ -49,7 +53,11 @@ parameters:
     default: 0
     type: number
   {{network.name}}NetCidr:
-    default: {{network.ip_subnet}}
+{%- if network.ipv6 or ipv6_override %}
+    default: "{{network.ipv6_subnet|default(network.ip_subnet|default(""))}}"
+{%- else %}
+    default: "{{network.ip_subnet|default("")}}"
+{%- endif %}
     description: Cidr for the {{network.name_lower}} network.
     type: string
 
@@ -74,17 +82,3 @@ outputs:
       - - {get_param: [IPPool, {get_param: {{network.name}}NetName}, {get_param: NodeIndex}]}
         - '/'
         - {str_split: ['/', {get_param: {{network.name}}NetCidr}, 1]}
-  host_routes:
-    description: Host routes of the ports subnet
-    value: {{network.routes|default([])}}
-  mtu:
-    description: The maximum transmission unit (MTU)
-    value: {{network.mtu|default('1500')}}
-  gateway_ip:
-    description: Gateway IP of the ports subnet
-{%- if network.ipv6|default(false) and network.gateway_ipv6|default(false) %}
-    value: {{network.gateway_ipv6|default('')}}
-{%- else %}
-    value: {{network.gateway_ip|default('')}}
-{%- endif %}
-

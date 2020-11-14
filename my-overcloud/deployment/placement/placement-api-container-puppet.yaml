@@ -28,6 +28,11 @@ parameters:
   DefaultPasswords:
     default: {}
     type: json
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
+    default: false
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -36,6 +41,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   EnableInternalTLS:
     type: boolean
     default: false
@@ -76,6 +87,7 @@ parameters:
 conditions:
   placement_workers_zero: {equals : [{get_param: PlacementWorkers}, 0]}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
 
@@ -104,20 +116,32 @@ outputs:
     description: Role data for the Placement API role.
     value:
       service_name: placement
+      firewall_rules:
+        '138 placement':
+          dport:
+            - 8778
+            - 13778
+      keystone_resources:
+        placement:
+          endpoints:
+            public: {get_param: [EndpointMap, PlacementPublic, uri]}
+            internal: {get_param: [EndpointMap, PlacementInternal, uri]}
+            admin: {get_param: [EndpointMap, PlacementAdmin, uri]}
+          users:
+            placement:
+              password: {get_param: PlacementPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'placement'
       config_settings:
         map_merge:
           - get_attr: [PlacementLogging, config_settings]
           - apache::default_vhost: false
-          - tripleo::placement::firewall_rules:
-              '138 placement':
-                dport:
-                  - 8778
-                  - 13778
-            placement::keystone::authtoken::project_name: 'service'
+          - placement::keystone::authtoken::project_name: 'service'
             placement::keystone::authtoken::password: {get_param: PlacementPassword}
             placement::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             placement::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             placement::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            placement::keystone::authtoken::interface: 'internal'
             placement::wsgi::apache::api_port: '8778'
             placement::wsgi::apache::ssl: {get_param: EnableInternalTLS}
             # NOTE: bind IP is found in hiera replacing the network name with the local node IP
@@ -145,8 +169,18 @@ outputs:
                 host: {get_param: [EndpointMap, MysqlInternal, host]}
                 path: /placement
                 query:
-                  read_default_file: /etc/my.cnf.d/tripleo.cnf
-                  read_default_group: tripleo
+                  if:
+                    - enable_sqlalchemy_collectd
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+                        plugin: collectd
+                        collectd_program_name: placement_api
+                        collectd_host: localhost
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+
           -
             if:
               - placement_workers_zero
@@ -157,13 +191,6 @@ outputs:
           - rsyslog:
               tripleo_logging_sources_placement:
                 - {get_param: PlacementLoggingSource}
-        keystone:
-          placement::keystone::auth::tenant: 'service'
-          placement::keystone::auth::public_url: {get_param: [EndpointMap, PlacementPublic, uri]}
-          placement::keystone::auth::internal_url: {get_param: [EndpointMap, PlacementInternal, uri]}
-          placement::keystone::auth::admin_url: {get_param: [EndpointMap, PlacementAdmin, uri]}
-          placement::keystone::auth::password: {get_param: PlacementPassword}
-          placement::keystone::auth::region: {get_param: KeystoneRegion}
         mysql:
           placement::db::mysql::password: {get_param: PlacementPassword}
           placement::db::mysql::user: placement
@@ -186,6 +213,17 @@ outputs:
         /var/lib/kolla/config_files/placement_api.json:
           command: /usr/sbin/httpd -DFOREGROUND
           config_files:
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
+              dest: "/etc/httpd/conf.d"
+              merge: false
+              preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
+              merge: false
+              preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -204,8 +242,8 @@ outputs:
         step_2:
           get_attr: [PlacementLogging, docker_config, step_2]
         step_3:
-          placement_api_db_extract_data_from_nova_api:
-            start_order: 0
+          placement_api_db_sync:
+            start_order: 1
             image: &placement_api_image {get_param: ContainerPlacementImage}
             net: host
             detach: false
@@ -217,39 +255,9 @@ outputs:
                 -
                   - /var/lib/config-data/placement/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
                   - /var/lib/config-data/placement/etc/placement/:/etc/placement/:ro
-            environment:
-              PLACEMENT_USER: placement
-              NOVA_API_USER: nova_api
-              PLACEMENT_DB_HOST: {get_param: [EndpointMap, MysqlInternal, host_nobrackets]}
-              PLACEMENT_PASS: {get_param: PlacementPassword}
-              NOVA_API_DB_HOST: {get_param: [EndpointMap, MysqlInternal, host_nobrackets]}
-              NOVA_API_PASS: {get_param: NovaPassword}
-            # NOTE(lyarwood): We can swallow return codes of 0, 3, 4, 5 as they
-            # suggest this is a fresh deployment with no data to extract
-            # (or that placemant is being deployed without nova). The
-            # current list of return codes provided by the migrate script is:
-            # 0: Success
-            # 1: Usage error
-            # 2: Configuration missing or incomplete
-            # 3: Migration already completed
-            # 4: No data to migrate from nova (new deployment)
-            # 5: Unable to connect to one or both databases
-            # 6: Unable to execute placement's CLI commands
-            command: "/usr/bin/bootstrap_host_exec placement su placement -s /bin/bash -c 'cd /tmp && /usr/share/placement/mysql-migrate-db.sh --migrate -; ret=$?; if [ $ret -ne 0 ] && [ $ret -ne 3 ] && [ $ret -ne 4 ] && [ $ret -ne 5 ]; then exit $ret; else exit 0; fi'"
-          placement_api_db_sync:
-            start_order: 1
-            image: *placement_api_image
-            net: host
-            detach: false
-            user: root
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
-                - {get_attr: [PlacementLogging, volumes]}
-                -
-                  - /var/lib/config-data/placement/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/placement/etc/placement/:/etc/placement/:ro
             command: "/usr/bin/bootstrap_host_exec placement su placement -s /bin/bash -c '/usr/bin/placement-manage db sync'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           placement_api:
             start_order: 1
@@ -265,17 +273,15 @@ outputs:
                 - {get_attr: [PlacementLogging, volumes]}
                 -
                   - /var/lib/kolla/config_files/placement_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/placement/:/var/lib/kolla/config_files/src:ro
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                  - /var/lib/config-data/puppet-generated/placement:/var/lib/kolla/config_files/src:ro
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
           placement_wait_for_service:

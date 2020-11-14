@@ -13,6 +13,10 @@ parameters:
     description: Name of the port
     default: ''
     type: string
+  DnsName:
+    description: DNS name of the port
+    default: ''
+    type: string
   ControlPlaneIP: # Here for compatibility with noop.yaml
     description: IP address on the control plane
     default: ''
@@ -70,6 +74,7 @@ resources:
     properties:
       network: {get_param: {{network.name}}NetName}
       name: {get_param: PortName}
+      dns_name: {get_param: DnsName}
       fixed_ips:
         if:
         - net_is_ctlplane_and_fixed_ip_not_set
@@ -98,19 +103,3 @@ outputs:
             - - {get_attr: [{{network.name}}Port, fixed_ips, 0, ip_address]}
               - '/'
               - {str_split: ['/', {get_attr: [{{network.name}}Port, subnets, 0, cidr]}, 1]}
-  host_routes:
-    description: Host routes of the ports subnet
-    value:
-          get_attr: [{{network.name}}Port, subnets, 0, host_routes]
-  mtu:
-    description: The maximum transmission unit (MTU)
-    value:
-          get_attr: [{{network.name}}Port, network, mtu]
-  gateway_ip:
-    description: Gateway IP of the ports subnet
-    value:
-          get_attr: [{{network.name}}Port, subnets, 0, gateway_ip]
-  cidr:
-    description: CIDR of the ports subnet
-    value:
-      str_split: ['/', {get_attr: [{{network.name}}Port, subnets, 0, cidr]}, 1]

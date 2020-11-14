@@ -1,12 +1,10 @@
-
-resource_registry:
-  OS::TripleO::BlockStorage::Net::SoftwareConfig: nic-configs/cinder-storage.yaml
-  OS::TripleO::Compute::Net::SoftwareConfig: nic-configs/compute-dvr.yaml
-  OS::TripleO::Controller::Net::SoftwareConfig: nic-configs/controller.yaml
-  OS::TripleO::ObjectStorage::Net::SoftwareConfig: nic-configs/swift-storage.yaml
-  OS::TripleO::CephStorage::Net::SoftwareConfig: nic-configs/ceph-storage.yaml
-
 parameter_defaults:
+  ControllerNetworkConfigTemplate: 'templates/ci/multiple_nics.j2'
+  ComputeNetworkConfigTemplate: 'templates/ci/multiple_nics.j2'
+  BlockStorageNetworkConfigTemplate: 'templates/ci/multiple_nics.j2'
+  CellControllerNetworkConfigTemplate: 'templates/ci/multiple_nics.j2'
+  ObjectStorageNetworkConfigTemplate: 'templates/ci/multiple_nics.j2'
+  CephStorageNetworkConfigTemplate: 'templates/ci/multiple_nics.j2'
   ExternalNetCidr: 10.0.0.0/24
   ExternalAllocationPools: [{"start": "10.0.0.10", "end": "10.0.0.50"}]
   ExternalInterfaceDefaultRoute: 10.0.0.1

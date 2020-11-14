@@ -103,7 +103,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/aodh_evaluator.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/aodh/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/aodh:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/aodh:/var/log/aodh:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
@@ -113,16 +113,9 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/aodh, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/aodh, 'setype': svirt_sandbox_file_t }
-        - name: aodh logs readme
-          copy:
-            dest: /var/log/aodh/readme.txt
-            content: |
-              Log files from aodh containers can be found under
-              /var/log/containers/aodh and /var/log/containers/httpd/aodh-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/aodh, 'setype': container_file_t, 'mode': '0750' }
       external_upgrade_tasks:
         - when:
             - step|int == 1
@@ -133,27 +126,8 @@ outputs:
           block:
             - name: Stop aodh evaluator container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - aodh_evaluator
                 tripleo_delegate_to: "{{ groups['aodh_evaluator'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-aodh-evaluator is deployed
-              command: systemctl is-enabled --quiet openstack-aodh-evaluator
-              ignore_errors: True
-              register: aodh_evaluator_enabled_result
-                - release == 'ocata'
-            - name: Set fact aodh_evaluator_enabled
-              set_fact:
-                aodh_evaluator_enabled: "{{ aodh_evaluator_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-aodh-evaluator service
-          service: name=openstack-aodh-evaluator state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - aodh_evaluator_enabled|bool

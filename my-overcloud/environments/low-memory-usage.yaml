@@ -5,6 +5,7 @@ parameter_defaults:
   HeatWorkers: 1
   KeystoneWorkers: 1
   NeutronWorkers: 1
+  NeutronMetadataWorkers: 1
   NovaWorkers: 1
   NovaSchedulerWorkers: 1
   SaharaWorkers: 1
@@ -16,14 +17,12 @@ parameter_defaults:
   ApacheServerLimit: 100
 
   ControllerExtraConfig:
-      'nova::network::neutron::neutron_timeout': '60'
+      'nova::network::neutron::timeout': '60'
 
   DatabaseSyncTimeout: 900
 
   # Override defaults to get HEALTH_OK with 1 OSD (for testing only)
   CephPoolDefaultSize: 1
   CephPoolDefaultPgNum: 16
-  ManilaCephFSDataPoolPGNum: 16
-  ManilaCephFSMetadataPoolPGNum: 16
 
   NovaReservedHostMemory: 512

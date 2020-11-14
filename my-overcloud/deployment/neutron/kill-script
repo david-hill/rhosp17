@@ -17,13 +17,13 @@ SIG=$1
 PID=$2
 NETNS=$(ip netns identify ${PID})
 
-if [ "x${NETNS}" == "x" ]; then
-  add_date "No network namespace detected, exiting"
-  exit 1
-fi
-
 {% if container_cli == 'podman' %}
-CLI="nsenter --net=/run/netns/${NETNS} --preserve-credentials -m -t 1 podman"
+if [ "x${NETNS}" == "x" ]; then
+  CLI="nsenter --all --preserve-credentials -t 1 podman"
+  SIG=9
+else
+  CLI="nsenter --net=/run/netns/${NETNS} --preserve-credentials -m -t 1 podman"
+fi
 {% elif container_cli == 'docker' %}
 {% if docker_additional_sockets and docker_additional_sockets|length > 0-%}
 export DOCKER_HOST=unix://{{ docker_additional_sockets[0] }}
@@ -40,9 +40,13 @@ kill_container() {
   $CLI rm $2
 }
 
-hup_container() {
-  add_date "Sending HUP signal to $1 ($2)"
-  $CLI kill --signal HUP $2
+signal_container() {
+  SIGNAL=$3
+  if [ -z "$SIGNAL" ]; then
+      SIGNAL="HUP"
+  fi
+  add_date "Sending signal '$SIGNAL' to $1 ($2)"
+  $CLI kill --signal $SIGNAL $2
 }
 
 {% raw -%}
@@ -53,13 +57,16 @@ if [ -f /proc/$PID/cgroup ]; then
 
   case $SIG in
     HUP)
-      hup_container $CT_NAME $CT_ID
+      signal_container $CT_NAME $CT_ID
       ;;
     9)
       kill_container $CT_NAME $CT_ID
       ;;
+    15)
+      signal_container $CT_NAME $CT_ID 15
+      ;;
     *)
-      add_date "Unknown action ${SIG} for ${$CT_NAME} ${CT_ID}"
+      add_date "Unknown action ${SIG} for ${CT_NAME} ${CT_ID}"
       exit 1
       ;;
   esac

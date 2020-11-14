@@ -34,15 +34,6 @@ Designate:
           '': /v2
     port: 9001
 
-Ec2Api:
-    Internal:
-        net_param: Ec2Api
-    Public:
-        net_param: Public
-    Admin:
-        net_param: Ec2Api
-    port: 8788
-
 Gnocchi:
     Internal:
         net_param: GnocchiApi
@@ -101,11 +92,6 @@ Heat:
         net_param: HeatApi
         uri_suffixes:
             '': /v1/%(tenant_id)s
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /heat/v1/%(project_id)s
-        port: 3000
     port: 8004
 
 HeatCfn:
@@ -151,11 +137,6 @@ Keystone:
             '': /
             V3: /v3
         port: 35357
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /keystone/v3
-        port: 3000
     port: 5000
 
 Manila:
@@ -176,6 +157,12 @@ Manila:
             V1: /v1/%(tenant_id)s
     port: 8786
 
+MetricsQdr:
+    Public:
+        net_param: Public
+    port: 5666
+    protocol: amqp
+
 Mistral:
     Internal:
         net_param: MistralApi
@@ -189,11 +176,6 @@ Mistral:
         net_param: MistralApi
         uri_suffixes:
             '': /v2
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /mistral/v2
-        port: 3000
     port: 8989
 
 Neutron:
@@ -218,11 +200,6 @@ Nova:
         net_param: NovaApi
         uri_suffixes:
             '': /v2.1
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /nova/v2.1
-        port: 3000
     port: 8774
 
 Placement:
@@ -265,12 +242,12 @@ Swift:
         uri_suffixes:
             '':
             S3:
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /swift/v1/AUTH_%(project_id)s
-        port: 3000
     port: 8080
+
+CephDashboard:
+    Internal:
+      net_param: CephDashboard
+    port: 8444
 
 CephGrafana:
     Internal:
@@ -314,11 +291,6 @@ Ironic:
         net_param: IronicApi
         uri_suffixes:
             '': /v1
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /ironic
-        port: 3000
     port: 6385
 
 IronicInspector:
@@ -328,11 +300,6 @@ IronicInspector:
         net_param: Public
     Admin:
         net_param: IronicInspector
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /ironic-inspector
-        port: 3000
     port: 5050
 
 Zaqar:
@@ -351,11 +318,6 @@ ZaqarWebSocket:
         net_param: Public
     Admin:
         net_param: ZaqarApi
-    UIConfig:
-        net_param: Public
-        uri_suffixes:
-            '': /zaqar
-        port: 3000
     port: 9000
     protocol: ws
 
@@ -383,3 +345,18 @@ NovaMetadata:
     Internal:
         net_param: NovaMetadata
     port: 8775
+
+Novajoin:
+    Internal:
+        net_param: Novajoin
+        uri_suffixes:
+            '': /v1
+    Public:
+        net_param: Public
+        uri_suffixes:
+            '': /v1
+    Admin:
+        net_param: Novajoin
+        uri_suffixes:
+            '': /v1
+    port: 9090

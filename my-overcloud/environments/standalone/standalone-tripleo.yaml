@@ -25,7 +25,7 @@
 #   openstack overcloud roles generate -o ~/roles_data.yaml Standalone
 parameter_defaults:
   # Set to true to append per network Vips to /etc/hosts on each node.
-  # Type: string
+  # Type: boolean
   AddVipsToEtcHosts: False
 
   # DNS servers to use for the Overcloud (2 max for some implementations). If not set the nameservers configured in the ctlplane subnet's dns_nameservers attribute will be used.
@@ -36,13 +36,25 @@ parameter_defaults:
   # Type: boolean
   EnablePackageInstall: True
 
+  # Allow to enable/disable safe networking defaults if os-net-config would fail to run with the provided config.
+  # Type: boolean
+  NetworkSafeDefaults: True
+
   # NTP servers list. Defaulted to a set of pool.ntp.org servers in order to have a sane default for Pacemaker deployments when not configuring this parameter by default.
   # Type: comma_delimited_list
   NtpServer: ['0.pool.ntp.org', '1.pool.ntp.org', '2.pool.ntp.org', '3.pool.ntp.org']
 
+  # How the server should receive the metadata required for software configuration.
+  # Type: string
+  SoftwareConfigTransport: POLL_SERVER_HEAT
+
   # Set this to true to open up ssh access from all sources.
   # Type: boolean
   SshFirewallAllowAll: True
+
+  # Standalone NetworkConfigTemplate
+  # Type: string
+  StandaloneNetworkConfigTemplate: templates/standalone.j2
 
   # How many replicas to use in the swift rings.
   # Type: number
@@ -50,9 +62,10 @@ parameter_defaults:
 
 resource_registry:
   OS::TripleO::Network::Ports::ControlPlaneVipPort: ../../deployed-server/deployed-neutron-port.yaml
-  OS::TripleO::Network::Ports::RedisVipPort: ../../network/ports/noop.yaml
   OS::TripleO::Network::Ports::OVNDBsVipPort: ../../network/ports/noop.yaml
-  OS::TripleO::NodeExtraConfigPost: ../../extraconfig/post_deploy/standalone_post.yaml
+  OS::TripleO::Network::Ports::RedisVipPort: ../../network/ports/noop.yaml
+  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
+  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -77,19 +90,16 @@ resource_registry:
   OS::TripleO::Services::GnocchiApi: OS::Heat::None
   OS::TripleO::Services::GnocchiMetricd: OS::Heat::None
   OS::TripleO::Services::GnocchiStatsd: OS::Heat::None
-  OS::TripleO::Services::HAproxy: OS::Heat::None
   OS::TripleO::Services::HeatApi: OS::Heat::None
   OS::TripleO::Services::HeatApiCfn: OS::Heat::None
   OS::TripleO::Services::HeatApiCloudwatch: OS::Heat::None
   OS::TripleO::Services::HeatEngine: OS::Heat::None
+  OS::TripleO::Services::IpaClient: OS::Heat::None
   OS::TripleO::Services::IronicApi: OS::Heat::None
   OS::TripleO::Services::IronicConductor: OS::Heat::None
   OS::TripleO::Services::IronicInspector: OS::Heat::None
   OS::TripleO::Services::IronicNeutronAgent: OS::Heat::None
   OS::TripleO::Services::IronicPxe: OS::Heat::None
-  OS::TripleO::Services::Keepalived: OS::Heat::None
-  OS::TripleO::Services::Kubernetes::Master: OS::Heat::None
-  OS::TripleO::Services::Kubernetes::Worker: OS::Heat::None
   OS::TripleO::Services::ManilaApi: OS::Heat::None
   OS::TripleO::Services::ManilaBackendCephFs: OS::Heat::None
   OS::TripleO::Services::ManilaBackendIsilon: OS::Heat::None
@@ -103,13 +113,13 @@ resource_registry:
   OS::TripleO::Services::MistralEngine: OS::Heat::None
   OS::TripleO::Services::MistralEventEngine: OS::Heat::None
   OS::TripleO::Services::MistralExecutor: OS::Heat::None
-  OS::TripleO::Services::OVNDBs: ../../deployment/ovn/ovn-dbs-container-puppet.yaml
-  OS::TripleO::Services::OpenStackClients: ../../deployment/clients/openstack-clients-baremetal-puppet.yaml
+  OS::TripleO::Services::OVNDBs: ../../deployment/ovn/ovn-dbs-pacemaker-puppet.yaml
+  OS::TripleO::Services::OpenStackClients: ../../deployment/clients/openstack-clients-baremetal-ansible.yaml
   OS::TripleO::Services::Podman: ../../deployment/podman/podman-baremetal-ansible.yaml
+  OS::TripleO::Services::Rear: OS::Heat::None
   OS::TripleO::Services::Redis: OS::Heat::None
   OS::TripleO::Services::Rsyslog: ../../deployment/logging/rsyslog-baremetal-ansible.yaml
   OS::TripleO::Services::SaharaApi: OS::Heat::None
   OS::TripleO::Services::SaharaEngine: OS::Heat::None
   OS::TripleO::Services::Tmpwatch: ../../deployment/logrotate/tmpwatch-install.yaml
   OS::TripleO::Services::Zaqar: OS::Heat::None
-  OS::TripleO::Standalone::Net::SoftwareConfig: ../../net-config-standalone.yaml

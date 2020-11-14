@@ -128,6 +128,13 @@ outputs:
     description: Role data for the swift storage services.
     value:
       service_name: swift_storage
+      firewall_rules:
+        '123 swift storage':
+          dport:
+            - 873
+            - 6000
+            - 6001
+            - 6002
       config_settings:
         map_merge:
           - {get_attr: [SwiftBase, role_data, config_settings]}
@@ -135,13 +142,6 @@ outputs:
           # swift::storage::all::mount_check: {if: [swift_mount_check, true, false]}
           - swift::storage::all::mount_check: false
             tripleo::profile::base::swift::storage::use_local_dir: {get_param: SwiftUseLocalDir}
-            tripleo::swift_storage::firewall_rules:
-              '123 swift storage':
-                dport:
-                  - 873
-                  - 6000
-                  - 6001
-                  - 6002
             swift::storage::all::incoming_chmod: 'Du=rwx,g=rx,o=rx,Fu=rw,g=r,o=r'
             swift::storage::all::outgoing_chmod: 'Du=rwx,g=rx,o=rx,Fu=rw,g=r,o=r'
             swift::storage::all::object_pipeline:
@@ -163,6 +163,7 @@ outputs:
                    "%{hiera('$NETWORK')}"
                  params:
                    $NETWORK: {get_param: [ServiceNetMap, SwiftStorageNetwork]}
+            rsync::server::pid_file: 'UNSET'
           -
             if:
             - account_workers_zero
@@ -188,7 +189,7 @@ outputs:
             - "\n"
             - - "class xinetd() {}"
               - "define xinetd::service($bind='',$port='',$server='',$server_args='') {}"
-              - "include ::tripleo::profile::base::swift::storage"
+              - "include tripleo::profile::base::swift::storage"
         config_image: {get_param: ContainerSwiftConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/swift_account_auditor.json:
@@ -312,15 +313,6 @@ outputs:
             command: ['chown', '-R', 'swift:', '/srv/node']
             volumes:
               - /srv/node:/srv/node:z
-          # FIXME (cschwede): remove this once the pid file setting is disabled
-          swift_rsync_fix:
-            image: {get_param: ContainerSwiftObjectImage}
-            net: host
-            user: root
-            detach: false
-            command: ['/bin/bash', '-c', 'sed -i "/pid file/d" /var/lib/kolla/config_files/src/etc/rsyncd.conf']
-            volumes:
-              - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:rw,z
         step_4:
           map_merge:
             - if:
@@ -337,7 +329,7 @@ outputs:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_account_auditor.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node:z
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift:z
@@ -349,12 +341,14 @@ outputs:
                   net: host
                   user: swift
                   restart: always
+                  healthcheck:
+                    test: /openstack/healthcheck
                   volumes:
                     list_concat:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_account_replicator.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift
@@ -370,7 +364,7 @@ outputs:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_container_auditor.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift
@@ -381,12 +375,14 @@ outputs:
                   net: host
                   user: swift
                   restart: always
+                  healthcheck:
+                    test: /openstack/healthcheck
                   volumes:
                     list_concat:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_container_replicator.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift
@@ -403,7 +399,7 @@ outputs:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_object_auditor.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift
@@ -414,12 +410,14 @@ outputs:
                   net: host
                   user: swift
                   restart: always
+                  healthcheck:
+                    test: /openstack/healthcheck
                   volumes:
                     list_concat:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_object_replicator.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift
@@ -436,7 +434,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_account_reaper.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node:z
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift:z
@@ -454,7 +452,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_account_server.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift
@@ -470,7 +468,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_container_updater.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift
@@ -488,7 +486,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_container_server.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift
@@ -504,7 +502,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_object_expirer.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift
@@ -520,7 +518,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_object_updater.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift
@@ -538,7 +536,7 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_object_server.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/cache/swift:/var/cache/swift
@@ -549,13 +547,17 @@ outputs:
                 net: host
                 user: root
                 restart: always
-                privileged: true
+                healthcheck:
+                  test: /openstack/healthcheck
+                privileged: false
+                cap_add:
+                  - NET_BIND_SERVICE
                 volumes:
                   list_concat:
                     - {get_attr: [ContainersCommon, volumes]}
                     -
                       - /var/lib/kolla/config_files/swift_rsync.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                       - /srv/node:/srv/node
                       - /dev:/dev
                       - /var/log/containers/swift:/var/log/swift:z
@@ -574,7 +576,7 @@ outputs:
                       - {get_attr: [ContainersCommon, volumes]}
                       -
                         - /var/lib/kolla/config_files/swift_container_sharder.json:/var/lib/kolla/config_files/config.json:ro
-                        - /var/lib/config-data/puppet-generated/swift/:/var/lib/kolla/config_files/src:ro
+                        - /var/lib/config-data/puppet-generated/swift:/var/lib/kolla/config_files/src:ro
                         - /srv/node:/srv/node
                         - /dev:/dev
                         - /var/cache/swift:/var/cache/swift
@@ -587,12 +589,11 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /srv/node, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/cache/swift, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/swift, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/swift, 'setype': var_log_t }
-            - { 'path': /var/log/containers, 'setype': svirt_sandbox_file_t }
+            - { 'path': /srv/node, 'setype': container_file_t }
+            - { 'path': /var/cache/swift, 'setype': container_file_t }
+            - { 'path': /var/log/containers/swift, 'setype': container_file_t, 'mode': '0750' }
         - name: Set swift_use_local_disks fact
           set_fact:
             swift_use_local_disks: {get_param: SwiftUseLocalDir}
@@ -601,13 +602,6 @@ outputs:
             path: "/srv/node/d1"
             state: directory
           when: swift_use_local_disks
-        - name: swift logs readme
-          copy:
-            dest: /var/log/swift/readme.txt
-            content: |
-              Log files from swift containers can be found under
-              /var/log/containers/swift and /var/log/containers/httpd/swift-*.
-          ignore_errors: true
         - name: Set fact for SwiftRawDisks
           set_fact:
             swift_raw_disks: {get_param: SwiftRawDisks}
@@ -618,10 +612,17 @@ outputs:
             opts: -f -i size=1024
           with_items: "{{ swift_raw_disks }}"
           when: swift_raw_disks
+        - name: Refresh facts if SwiftRawDisks is set to get uuids if newly created partitions
+          setup:
+            gather_subset:
+              - '!all'
+              - '!min'
+              - 'hardware'
+          when: swift_raw_disks
         - name: Mount devices defined in SwiftRawDisks
           mount:
             name: /srv/node/{{ item }}
-            src: "{{ swift_raw_disks[item]['base_dir']|default('/dev') }}/{{ item }}"
+            src: "{% if lsblk.results['uuids'][item] is defined %}UUID={{ ansible_device_links['uuids'][item][0] }}{% else %}{{ swift_raw_disks[item]['base_dir']|default('/dev') }}/{{ item }}{% endif %}"
             fstype: xfs
             opts: noatime
             state: mounted
@@ -629,12 +630,15 @@ outputs:
           when: swift_raw_disks
       deploy_steps_tasks:
         - name: Configure rsyslog for swift-storage
-          when: step|int == 1
+          when:
+            - step|int == 1
+            - swift_logconfig is not defined
+            - swift_rsyslog_config is not defined
           block:
             - name: Check if rsyslog exists
-              shell: systemctl list-unit-files --type=service | grep -q rsyslog
-              register: rsyslog_config
-              failed_when: rsyslog_config.rc == 2
+              systemd:
+                name: rsyslog
+              register: swift_rsyslog_config
             - block:
                 - name: Forward logging to swift.log file
                   copy:
@@ -643,19 +647,18 @@ outputs:
                       local2.*                 /var/log/containers/swift/swift.log
                       &                        stop
                     dest: /etc/rsyslog.d/openstack-swift.conf
-                  register: logconfig
+                  register: swift_logconfig
                 - name: Restart rsyslogd service after logging conf change
-                  service: name=rsyslog state=restarted
+                  service:
+                    name: rsyslog
+                    state: restarted
                   when:
-                    - logconfig is changed
+                    - swift_logconfig is changed
               when:
-                - rsyslog_config is changed
-                - rsyslog_config.rc == 0
+                - swift_rsyslog_config is defined
+                - swift_rsyslog_config.status is defined
+                - swift_rsyslog_config.status.ActiveState == 'active'
       update_tasks:
-        - name: Ensure rsyncd pid file is absent
-          file:
-            path: /var/run/rsyncd.pid
-            state: absent
         - name: Check swift containers log folder/symlink exists
           stat:
             path: /var/log/containers/swift
@@ -665,37 +668,3 @@ outputs:
             path: /var/log/containers/swift
             state: absent
           when: swift_log_link.stat.islnk is defined and swift_log_link.stat.islnk
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if swift storage services are deployed
-              command: systemctl is-enabled --quiet "{{ item }}"
-              with_items:
-                - openstack-swift-account-auditor
-                - openstack-swift-account-reaper
-                - openstack-swift-account-replicator
-                - openstack-swift-account
-                - openstack-swift-container-auditor
-                - openstack-swift-container-replicator
-                - openstack-swift-container-updater
-                - openstack-swift-container
-                - openstack-swift-container-sync
-                - openstack-swift-object-auditor
-                - openstack-swift-object-replicator
-                - openstack-swift-object-updater
-                - openstack-swift-object
-                - openstack-swift-object-reconstructor
-              ignore_errors: True
-              register: swift_services_enabled_result
-            - name: Set fact swift_services_enabled
-              set_fact:
-                swift_services_enabled: "{{ swift_services_enabled_result }}"
-        - name: Stop swift storage services
-          service: name={{ item.item }} state=stopped enabled=no
-          with_items: "{{ swift_services_enabled.results }}"
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - item.rc == 0

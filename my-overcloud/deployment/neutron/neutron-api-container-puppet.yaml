@@ -41,6 +41,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   EnableInternalTLS:
     type: boolean
     default: false
@@ -88,6 +94,10 @@ parameters:
     description: Enable Neutron DVR.
     default: ''
     type: string
+  NeutronEnableIgmpSnooping:
+    description: Enable IGMP Snooping.
+    type: boolean
+    default: false
   KeystoneRegion:
     type: string
     default: 'regionOne'
@@ -97,6 +107,11 @@ parameters:
     type: string
   EnableInternalTLS:
     type: boolean
+    default: false
+  EnableSQLAlchemyCollectd:
+    type: boolean
+    description: >
+        Set to true to enable the SQLAlchemy-collectd server plugin
     default: false
   NeutronApiPolicies:
     description: |
@@ -112,6 +127,10 @@ parameters:
     default: '500'
     type: string
     description: Number of ports allowed per tenant, and minus means unlimited.
+  NeutronSecurityGroupQuota:
+    default: '10'
+    type: string
+    description: Number of security groups allowed per tenant, and minus means unlimited
   # TODO(bogdando): Right now OVN doesn't support AZ aware routing scheduling.
   # Later in Train cycle OVN ml2 driver will be extended to support it.
   # Until then, we have to determine if NeutronMechanismDrivers is OVN or OVS.
@@ -178,6 +197,7 @@ conditions:
   az_unset: {equals: [{get_param: NeutronDefaultAvailabilityZones}, '']}
   omit_az_configs: {or: [is_ovn_in_neutron_mechanism_driver, az_unset]}
   ovn_and_tls: {and: [is_ovn_in_neutron_mechanism_driver, internal_tls_enabled]}
+  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
 
@@ -218,13 +238,29 @@ outputs:
     description: Role data for the Neutron API role.
     value:
       service_name: neutron_api
+      firewall_rules:
+        '114 neutron api':
+          dport:
+            - 9696
+            - 13696
+      keystone_resources:
+        neutron:
+          endpoints:
+            public: {get_param: [EndpointMap, NeutronPublic, uri]}
+            internal: {get_param: [EndpointMap, NeutronInternal, uri]}
+            admin: {get_param: [EndpointMap, NeutronAdmin, uri]}
+          users:
+            neutron:
+              password: {get_param: NeutronPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'network'
       monitoring_subscription: {get_param: MonitoringSubscriptionNeutronServer}
       config_settings:
         map_merge:
           - get_attr: [NeutronBase, role_data, config_settings]
           - get_attr: [TLSProxyBase, role_data, config_settings]
           - get_attr: [NeutronLogging, config_settings]
-          - neutron::server::database_connection:
+          - neutron::db::database_connection:
               make_url:
                 scheme: {get_param: [EndpointMap, MysqlInternal, protocol]}
                 username: neutron
@@ -232,33 +268,49 @@ outputs:
                 host: {get_param: [EndpointMap, MysqlInternal, host]}
                 path: /ovs_neutron
                 query:
-                  read_default_file: /etc/my.cnf.d/tripleo.cnf
-                  read_default_group: tripleo
+                  if:
+                    - enable_sqlalchemy_collectd
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+                        plugin: collectd
+                        collectd_program_name: ovs_neutron
+                        collectd_host: localhost
+                    -
+                        read_default_file: /etc/my.cnf.d/tripleo.cnf
+                        read_default_group: tripleo
+
             neutron::policy::policies: {get_param: NeutronApiPolicies}
             neutron::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
-            neutron::keystone::authtoken::auth_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             neutron::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             neutron::server::allow_automatic_l3agent_failover: {get_param: NeutronAllowL3AgentFailover}
             neutron::server::enable_proxy_headers_parsing: true
+            neutron::server::igmp_snooping_enable: {get_param: NeutronEnableIgmpSnooping}
             neutron::keystone::authtoken::password: {get_param: NeutronPassword}
-            neutron::server::notifications::auth_url: { get_param: [ EndpointMap, KeystoneInternal, uri_no_suffix ] }
-            neutron::server::notifications::tenant_name: 'service'
-            neutron::server::notifications::project_name: 'service'
-            neutron::server::notifications::password: {get_param: NovaPassword}
-            neutron::server::notifications::endpoint_type: 'internal'
+            neutron::server::notifications::nova::auth_url: { get_param: [ EndpointMap, KeystoneInternal, uri_no_suffix ] }
+            neutron::server::notifications::nova::project_name: 'service'
+            neutron::server::notifications::nova::user_domain_name: 'Default'
+            neutron::server::notifications::nova::project_domain_name: 'Default'
+            neutron::server::notifications::nova::region_name: {get_param: KeystoneRegion}
+            neutron::server::notifications::nova::password: {get_param: NovaPassword}
+            neutron::server::notifications::nova::endpoint_type: 'internal'
             neutron::keystone::authtoken::project_name: 'service'
             neutron::keystone::authtoken::user_domain_name: 'Default'
             neutron::keystone::authtoken::project_domain_name: 'Default'
             neutron::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            neutron::keystone::authtoken::interface: 'internal'
             neutron::quota::quota_port: {get_param: NeutronPortQuota}
-            neutron::server::sync_db: true
-            neutron::server::notifications::region_name: {get_param: KeystoneRegion}
+            neutron::quota::quota_security_group: {get_param: NeutronSecurityGroupQuota}
             neutron::server::placement::region_name: {get_param: KeystoneRegion}
-            tripleo::neutron_api::firewall_rules:
-              '114 neutron api':
-                dport:
-                  - 9696
-                  - 13696
+            neutron::server::placement::password: {get_param: NovaPassword}
+            neutron::server::placement::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            neutron::server::placement::project_domain_name: 'Default'
+            neutron::server::placement::project_name: 'service'
+            neutron::server::placement::user_domain_name: 'Default'
+            neutron::server::placement::username: nova
+            neutron::server::placement::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            neutron::server::placement::auth_type: 'password'
+            neutron::server::placement::region_name: {get_param: KeystoneRegion}
             # NOTE: bind IP is found in hiera replacing the network name with the local node IP
             # for the given network; replacement examples (eg. for internal_api):
             # internal_api -> IP
@@ -357,13 +409,6 @@ outputs:
         rsyslog:
           tripleo_logging_sources_neutron_api:
             - {get_param: NeutronApiLoggingSource}
-        keystone:
-          neutron::keystone::auth::tenant: 'service'
-          neutron::keystone::auth::public_url: {get_param: [EndpointMap, NeutronPublic, uri]}
-          neutron::keystone::auth::internal_url: { get_param: [ EndpointMap, NeutronInternal, uri ] }
-          neutron::keystone::auth::admin_url: { get_param: [ EndpointMap, NeutronAdmin, uri ] }
-          neutron::keystone::auth::password: {get_param: NeutronPassword}
-          neutron::keystone::auth::region: {get_param: KeystoneRegion}
         mysql:
           neutron::db::mysql::password: {get_param: NeutronPassword}
           neutron::db::mysql::user: neutron
@@ -372,16 +417,6 @@ outputs:
           neutron::db::mysql::allowed_hosts:
             - '%'
             - "%{hiera('mysql_bind_host')}"
-        placement:
-          neutron::server::placement::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-          neutron::server::placement::project_domain_name: 'Default'
-          neutron::server::placement::project_name: 'service'
-          neutron::server::placement::user_domain_name: 'Default'
-          neutron::server::placement::password: {get_param: NovaPassword}
-          neutron::server::placement::username: nova
-          neutron::server::placement::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-          neutron::server::placement::auth_type: 'password'
-          neutron::server::placement::region_name: {get_param: KeystoneRegion}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: neutron
@@ -432,6 +467,13 @@ outputs:
               dest: "/etc/httpd/conf.d"
               merge: false
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
+              merge: false
+              preserve_properties: true
       docker_config:
         step_2:
           get_attr: [NeutronLogging, docker_config, step_2]
@@ -453,6 +495,8 @@ outputs:
             # FIXME: we should make config file permissions right
             # and run as neutron user
             #command: "/usr/bin/bootstrap_host_exec neutron_api su neutron -s /bin/bash -c 'neutron-db-manage upgrade heads'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           map_merge:
             - neutron_api:
@@ -470,7 +514,7 @@ outputs:
                     - {get_param: NeutronApiOptVolumes}
                     -
                       - /var/lib/kolla/config_files/neutron_api.json:/var/lib/kolla/config_files/config.json:ro
-                      - /var/lib/config-data/puppet-generated/neutron/:/var/lib/kolla/config_files/src:ro
+                      - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
                     - if:
                       - ovn_and_tls
                       -
@@ -494,7 +538,7 @@ outputs:
                         - {get_attr: [NeutronLogging, volumes]}
                         -
                           - /var/lib/kolla/config_files/neutron_server_tls_proxy.json:/var/lib/kolla/config_files/config.json:ro
-                          - /var/lib/config-data/puppet-generated/neutron/:/var/lib/kolla/config_files/src:ro
+                          - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
                           - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
                           - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
                     environment:
@@ -520,45 +564,8 @@ outputs:
           block:
             - name: Stop neutron api container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - neutron_api
                 tripleo_delegate_to: "{{ groups['neutron_api'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if neutron_server is deployed
-              command: systemctl is-enabled --quiet neutron-server
-              ignore_errors: True
-              register: neutron_server_enabled_result
-            - name: Set fact neutron_server_enabled
-              set_fact:
-                neutron_server_enabled: "{{ neutron_server_enabled_result.rc == 0 }}"
-        - name: Stop neutron_server
-          service: name=neutron-server state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - neutron_server_enabled|bool
-        - when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-          block:
-            - name: Neutron package update
-              package:
-                name: 'openstack-neutron*'
-                state: latest
-            - name: Neutron package update workaround
-              package: name=python-networking-odl state=latest
-              # package python-networking-cisco may or may not be present
-            - name: Networking cisco db sync workaround
-              ignore_errors: true
-              package: name=python-networking-cisco state=latest
-        - name: Neutron db sync
-          command: neutron-db-manage upgrade head
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool

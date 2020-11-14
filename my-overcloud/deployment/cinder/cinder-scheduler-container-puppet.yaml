@@ -63,6 +63,9 @@ resources:
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
+  CinderCommon:
+    type: ./cinder-common-container-puppet.yaml
+
 outputs:
   role_data:
     description: Role data for the Cinder Scheduler role.
@@ -86,7 +89,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::base::cinder::scheduler"
+            - - "include tripleo::profile::base::cinder::scheduler"
             - - {get_attr: [CinderBase, role_data, step_config]}
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerCinderConfigImage}
@@ -98,10 +101,19 @@ outputs:
               dest: "/"
               merge: true
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src-tls/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
+              optional: true
           permissions:
             - path: /var/log/cinder
               owner: cinder:cinder
               recurse: true
+            - path: /etc/pki/tls/certs/etcd.crt
+              owner: cinder:cinder
+            - path: /etc/pki/tls/private/etcd.key
+              owner: cinder:cinder
       docker_config:
         step_2:
           cinder_scheduler_init_logs:
@@ -121,11 +133,9 @@ outputs:
             healthcheck: {get_attr: [ContainersCommon, healthcheck_rpc_port]}
             volumes:
               list_concat:
-                - {get_attr: [ContainersCommon, volumes]}
+                - {get_attr: [CinderCommon, cinder_common_volumes]}
                 -
                   - /var/lib/kolla/config_files/cinder_scheduler.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/cinder/:/var/lib/kolla/config_files/src:ro
-                  - /var/log/containers/cinder:/var/log/cinder:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -134,16 +144,9 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/cinder, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/cinder, 'setype': svirt_sandbox_file_t }
-        - name: cinder logs readme
-          copy:
-            dest: /var/log/cinder/readme.txt
-            content: |
-              Log files from cinder containers can be found under
-              /var/log/containers/cinder and /var/log/containers/httpd/cinder-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/cinder, 'setype': container_file_t, 'mode': '0750' }
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink
@@ -159,26 +162,8 @@ outputs:
           block:
             - name: Stop cinder scheduler container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - cinder_scheduler
                 tripleo_delegate_to: "{{ groups['cinder_scheduler'] | default([]) }}"
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if cinder_scheduler is deployed
-              command: systemctl is-enabled --quiet openstack-cinder-scheduler
-              ignore_errors: True
-              register: cinder_scheduler_enabled_result
-            - name: Set fact cinder_scheduler_enabled
-              set_fact:
-                cinder_scheduler_enabled: "{{ cinder_scheduler_enabled_result.rc == 0 }}"
-        - name: Stop openstack-cinder-scheduler
-          service: name=openstack-cinder-scheduler state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - cinder_scheduler_enabled|bool

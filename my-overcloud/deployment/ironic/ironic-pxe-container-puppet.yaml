@@ -63,6 +63,13 @@ outputs:
               dest: "/etc/httpd/conf.d"
               merge: false
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
+              merge: false
+              preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -104,6 +111,19 @@ outputs:
                 name: xinetd
                 state: restarted
               when: xinetd_active_result.rc == 0
+            - name: Check if ironic_pxe_tftp is enabled
+              command: systemctl is-enabled --quiet ironic_pxe_tftp
+              failed_when: false
+              register: ironic_pxe_tftp_enabled_result
+            - name: Set fact ironic_pxe_tftp_enabled
+              set_fact:
+                ironic_pxe_tftp_enabled: "{{ ironic_pxe_tftp_enabled_result.rc == 0 }}"
+        - name: Stop ironic_pxe_tftp service
+          when:
+            - step|int == 1
+            - ironic_pxe_tftp_enabled_result|bool
+          service: name=ironic_pxe_tftp state=stopped enabled=no
+
       docker_config:
         step_4:
           ironic_pxe_tftp:
@@ -120,7 +140,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ironic_pxe_tftp.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ironic/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ironic:/var/lib/kolla/config_files/src:ro
                   - /var/lib/ironic:/var/lib/ironic/:shared,z
                   - /var/log/containers/ironic:/var/log/ironic:z
                   - /var/log/containers/httpd/ironic-pxe:/var/log/httpd:z
@@ -140,7 +160,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ironic_pxe_http.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ironic/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ironic:/var/lib/kolla/config_files/src:ro
                   - /var/lib/ironic:/var/lib/ironic/:shared,z
                   - /var/log/containers/ironic:/var/log/ironic:z
                   - /var/log/containers/httpd/ironic-pxe:/var/log/httpd:z
@@ -152,15 +172,8 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/lib/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/ironic-pxe, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ironic, 'setype': svirt_sandbox_file_t }
-        - name: ironic logs readme
-          copy:
-            dest: /var/log/ironic/readme.txt
-            content: |
-              Log files from ironic containers can be found under
-              /var/log/containers/ironic and /var/log/containers/httpd/ironic-*.
-          ignore_errors: true
+            - { 'path': /var/lib/ironic, 'setype': container_file_t }
+            - { 'path': /var/log/containers/ironic, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/containers/httpd/ironic-pxe, 'setype': container_file_t, 'mode': '0750' }

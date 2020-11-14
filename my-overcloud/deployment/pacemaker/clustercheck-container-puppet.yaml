@@ -44,9 +44,6 @@ resources:
   ContainersCommon:
     type: ../containers-common.yaml
 
-# We import from the corresponding docker service because otherwise we risk
-# rewriting the tripleo::mysql::firewall_rules key with the baremetal firewall
-# rules (see LP#1728918)
   MysqlPuppetBase:
     type: ../database/mysql-pacemaker-puppet.yaml
     properties:
@@ -62,12 +59,20 @@ outputs:
     description: Containerized service clustercheck using composable services.
     value:
       service_name: clustercheck
-      config_settings: {get_attr: [MysqlPuppetBase, role_data, config_settings]}
+      config_settings:
+        map_merge:
+          - get_attr: [MysqlPuppetBase, role_data, config_settings]
+          - tripleo::profile::pacemaker::clustercheck::bind_address:
+              str_replace:
+                template:
+                  "%{hiera('fqdn_$NETWORK')}"
+                params:
+                  $NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
       # BEGIN DOCKER SETTINGS #
       puppet_config:
         config_volume: clustercheck
         puppet_tags: file # set this even though file is the default
-        step_config: "include ::tripleo::profile::pacemaker::clustercheck"
+        step_config: "include tripleo::profile::pacemaker::clustercheck"
         config_image: {get_param: ContainerClustercheckConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/clustercheck.json:
@@ -84,19 +89,21 @@ outputs:
             image: {get_param: ContainerClustercheckImage}
             restart: always
             net: host
+            healthcheck:
+              test: /openstack/healthcheck
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/clustercheck.json:/var/lib/kolla/config_files/config.json
-                  - /var/lib/config-data/puppet-generated/clustercheck/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/clustercheck:/var/lib/kolla/config_files/src:ro
                   - /var/lib/mysql:/var/lib/mysql
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
       upgrade_tasks:
       update_tasks:
-        # Nothing: It's not managed by pacemaker, so let paunch do it.
+        # Nothing: It's not managed by pacemaker, so let tripleo_container_manage do it.
       external_upgrade_tasks:
         - when:
             - step|int == 1
@@ -107,7 +114,7 @@ outputs:
           block:
             - name: Stop clustercheck container
               import_role:
-                name: tripleo-container-stop
+                name: tripleo_container_stop
               vars:
                 tripleo_containers_to_stop:
                   - clustercheck

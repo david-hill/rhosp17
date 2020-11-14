@@ -60,7 +60,7 @@ def parse_opts(argv):
     return opts
 
 
-# FIXME: This duplicates code from tools/yaml-nic-config-2-script.py, we should
+# FIXME: This duplicates code from tools/convert_nic_config.py, we should
 # refactor to share the common code
 def to_commented_yaml(filename):
     """Convert comments into 'comments<num>: ...' YAML"""
@@ -106,7 +106,7 @@ def to_commented_yaml(filename):
     return out_str
 
 
-# FIXME: This duplicates code from tools/yaml-nic-config-2-script.py, we should
+# FIXME: This duplicates code from tools/convert_nic_config.py, we should
 # refactor to share the common code
 def to_normal_yaml(filename):
     """Convert back to normal #commented YAML"""
@@ -160,7 +160,7 @@ class TemplateDumper(yaml.SafeDumper):
         return self.represent_scalar('tag:yaml.org,2002:str', data, style='>')
 
 
-# FIXME: This duplicates code from tools/yaml-nic-config-2-script.py, we should
+# FIXME: This duplicates code from tools/convert_nic_config.py, we should
 # refactor to share the common code
 # We load mappings into OrderedDict to preserve their order
 class TemplateLoader(yaml.SafeLoader):
@@ -180,7 +180,7 @@ TemplateLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
                                TemplateLoader.construct_mapping)
 
 
-# FIXME: This duplicates code from tools/yaml-nic-config-2-script.py, we should
+# FIXME: This duplicates code from tools/convert_nic_config.py, we should
 # refactor to share the common code
 def write_template(template, filename=None):
     with open(filename, 'w') as f:
@@ -227,6 +227,8 @@ def process_templates_and_get_reference_parameters():
     return reference_params
 
 
+# FIXME: This duplicates code from tools/convert_nic_config.py, we should
+# refactor to share the common code
 def validate_template():
     if not os.path.exists(OPTS.template):
         raise RuntimeError('Template not provided.')
@@ -235,6 +237,8 @@ def validate_template():
     pass
 
 
+# FIXME: This duplicates code from tools/convert_nic_config.py, we should
+# refactor to share the common code
 def backup_template():
     extension = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
     backup_filename = os.path.realpath(OPTS.template) + '.' + extension

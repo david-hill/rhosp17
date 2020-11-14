@@ -55,7 +55,7 @@ parameters:
           registry_username: password
   SystemdDropInDependencies:
     default: true
-    description: tell the container manager (e.g. paunch) to inject
+    description: tell the tripleo_container_manage to inject
                  additional ordering dependencies for the systemd
                  scopes associated to podman containers.
     type: boolean
@@ -104,15 +104,14 @@ outputs:
 
           - name: Run podman install
             include_role:
-              name: tripleo-podman
+              name: tripleo_podman
               tasks_from: tripleo_podman_install.yml
-              vars_from: "redhat.yml"
             vars:
               tripleo_container_registry_insecure_registries: "{{ container_registry_insecure_registries }}"
 
           - name: Run podman login
             include_role:
-              name: tripleo-podman
+              name: tripleo_podman
               tasks_from: tripleo_podman_login.yml
             vars:
               tripleo_container_registry_logins: "{{ container_registry_logins }}"
@@ -120,29 +119,76 @@ outputs:
 
         - if:
           - systemd_drop_in_dependencies_enabled
-          - - name: Configure paunch to generate systemd drop-in dependencies
+          - - name: Configure tripleo_container_manage to generate systemd drop-in dependencies
               copy:
                 dest: /etc/sysconfig/podman_drop_in
                 content: |
-                  This file makes paunch generate additional systemd
+                  This file makes tripleo_container_manage generate additional systemd
                   dependencies for containers that have special
                   start/stop ordering constraints. It ensures that
                   those constraints are enforced on reboot/shutdown.
-          - - name: Configure paunch to not generate drop-in dependencies
+          - - name: Configure tripleo_container_manage to not generate drop-in dependencies
               file:
                 path: /etc/sysconfig/podman_drop_in
                 state: absent
 
+      deploy_steps_tasks:
+        - when:
+            - (step|int) == 1
+          block:
+            # NOTE(mwhahaha): validate_certs is a misnomer because what it
+            # actually does is enable the --tls-verify flag which forces
+            # registries to only be over HTTPS. By default, podman will only
+            # use HTTPS registries but has a way to configure specific insecure
+            # and non-HTTPS registries. The --tls-verify flag prevents this
+            # fallback from functioning. We rely on this fallback for the
+            # undercloud registry.
+            - name: Pre-fetch all the containers
+              become: true
+              podman_image:
+                  name: "{{ prefetch_image }}"
+                  validate_certs: false
+                  force: true
+              retries: 5
+              delay: 5
+              loop_control:
+                  loop_var: prefetch_image
+              loop: "{{ lookup('file', tripleo_role_name + '/docker_config.yaml', errors='ignore') | default('{}', True) | from_yaml | recursive_get_key_from_dict(key='image') | unique }}"
+
       service_config_settings: {}
 
       upgrade_tasks:
+        - name: Run podman install
+          when:
+            - step|int == 1
+          block:
+            - name: Make sure the Undercloud hostname is included in /etc/hosts
+              when:
+                - undercloud_hosts_entries is defined
+              lineinfile:
+                dest: /etc/hosts
+                line: "{{ undercloud_hosts_entries | join('') }}"
+                state: present
+            - name: Set container_registry_insecure_registries fact.
+              set_fact:
+                container_registry_insecure_registries:
+                  if:
+                    - insecure_registry_is_empty
+                    - []
+                    - {get_param: DockerInsecureRegistryAddress}
+            - include_role:
+                name: tripleo_podman
+                tasks_from: tripleo_podman_install.yml
+              vars:
+                tripleo_container_registry_insecure_registries: "{{ container_registry_insecure_registries }}"
+
         - name: system_upgrade_prepare step 2
           tags:
             - never
             - system_upgrade
             - system_upgrade_prepare
           when:
-            - (step | int) == 2
+            - step|int == 2
           block:
             - name: Check if pcs is present
               stat:
@@ -156,32 +202,24 @@ outputs:
               when: pcs_stat.stat.exists
             - name: Stop all services by stopping all docker containers
               include_role:
-                name: tripleo-podman
+                name: tripleo_podman
                 tasks_from: tripleo_docker_stop.yml
               tags:
                 - never
                 - system_upgrade
                 - system_upgrade_prepare
 
-        - name: Run podman install
-          when:
-            - (step | int) == 1
-          include_role:
-            name: tripleo-podman
-            tasks_from: tripleo_podman_install.yml
-            vars_from: "redhat.yml"
-
       post_upgrade_tasks:
         - name: Purge everything about docker on the host
           when:
             - (step | int) == 3
           include_role:
-            name: tripleo-podman
+            name: tripleo_podman
             tasks_from: tripleo_docker_purge.yml
 
         - name: Stop docker
           include_role:
-            name: tripleo-podman
+            name: tripleo_podman
             tasks_from: tripleo_docker_stop.yml
 
         - name: Purge Podman
@@ -189,7 +227,7 @@ outputs:
             - (step | int) == 3
             - container_cli == 'podman'
           include_role:
-            name: tripleo-podman
+            name: tripleo_podman
             tasks_from: tripleo_podman_purge.yml
 
       post_update_tasks:
@@ -198,5 +236,5 @@ outputs:
             - (step | int) == 3
             - container_cli == 'podman'
           include_role:
-            name: tripleo-podman
+            name: tripleo_podman
             tasks_from: tripleo_podman_purge.yml

@@ -10,6 +10,20 @@ parameters:
   ContainerOvnDbsConfigImage:
     description: image
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster.common.tag/IMAGENAME:pcmklatest'.
+    type: boolean
+  ClusterFullTag:
+    default: false
+    description: When set to true, the pacemaker service uses a fully
+                 constant tag for its container image name, e.g.
+                 'cluster.common.tag/SERVICENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -44,6 +58,10 @@ parameters:
     description: Port of the OVN Southbound DB server
     type: number
     default: 6642
+  EnableLoadBalancer:
+    default: true
+    description: Whether to deploy a LoadBalancer, set to false when an external load balancer is used.
+    type: boolean
   ConfigDebug:
     default: false
     description: Whether to run config management (e.g. Puppet) in debug mode.
@@ -72,12 +90,20 @@ parameters:
     description: timeout for monitor of ovn dbs resource in seconds
     type: number
     default: 60
-
+  OVNDBSReplicationInterval:
+    description: Probe interval for ovsdb-server. It configure probe
+      interval for connection for ovsdb-server when it is
+      in backup mode and connects to the active ovsdb-server for replication
+    type: number
+    default: 60000
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
+  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
+  use_external_load_balancer: {equals: [{get_param: EnableLoadBalancer}, false]}
 
 resources:
 
@@ -101,32 +127,51 @@ outputs:
     description: Role data for the OVN Dbs HA role.
     value:
       service_name: ovn_dbs
+      firewall_rules:
+        '121 OVN DB server ports':
+          proto: 'tcp'
+          dport:
+            # Control port for pcmk remote bundle
+            - 3125
+            - {get_param: OVNNorthboundServerPort}
+            - {get_param: OVNSouthboundServerPort}
       config_settings:
         map_merge:
           - get_attr: [OVNDbsBase, role_data, config_settings]
           - tripleo::profile::pacemaker::ovn_dbs_bundle::ovn_dbs_docker_image: &ovn_dbs_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: ContainerOvnDbsImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              if:
+                - common_tag_full
+                - "cluster.common.tag/ovn-northd:pcmklatest"
+                - yaql:
+                    data:
+                      if:
+                        - common_tag_enabled
+                        - yaql:
+                            data: {get_param: ContainerOvnDbsImage}
+                            expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                        - {get_param: ContainerOvnDbsImage}
+                    expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
           - tripleo::profile::pacemaker::ovn_dbs_bundle::nb_db_port: {get_param: OVNNorthboundServerPort}
           - tripleo::profile::pacemaker::ovn_dbs_bundle::sb_db_port: {get_param: OVNSouthboundServerPort}
           - tripleo::profile::pacemaker::ovn_dbs_bundle::container_backend: {get_param: ContainerCli}
           - tripleo::profile::pacemaker::ovn_dbs_bundle::dbs_timeout: {get_param: OVNDBSPacemakerTimeout}
-          - tripleo::haproxy::ovn_dbs_manage_lb: false
-          - tripleo::ovn_dbs::firewall_rules:
-              '121 OVN DB server ports':
-                proto: 'tcp'
-                dport:
-                  # Control port for pcmk remote bundle
-                  - 3125
-                  - {get_param: OVNNorthboundServerPort}
-                  - {get_param: OVNSouthboundServerPort}
+          - tripleo::profile::pacemaker::ovn_dbs_bundle::replication_probe_interval: {get_param: OVNDBSReplicationInterval}
+          - tripleo::profile::pacemaker::ovn_dbs_bundle::force_ocf: true
+          - tripleo::haproxy::ovn_dbs_manage_lb:
+              if:
+                - use_external_load_balancer
+                - true
+                - false
+          - tripleo::profile::pacemaker::ovn_dbs_bundle::listen_on_master_ip_only:
+              if:
+                - use_external_load_balancer
+                - 'no'
+                - 'yes'
           - if:
             - internal_tls_enabled
             - generate_service_certificates: true
+              tripleo::certmonger::ovn_dbs::postsave_cmd:
+                /usr/bin/certmonger-ha-resource-refresh.sh ovn_dbs ovndb_servers ovn-dbs-bundle Slave Master
               tripleo::profile::pacemaker::ovn_dbs_bundle::ca_file:
                 get_param: InternalTLSCAFile
               tripleo::profile::base::neutron::agents::ovn::protocol: 'ssl'
@@ -178,28 +223,8 @@ outputs:
           - null
       docker_config:
         step_3:
-          ovn_dbs_restart_bundle:
-            start_order: 0
-            config_volume: ovn_dbs
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            environment:
-              TRIPLEO_MINOR_UPDATE: ''
-            command: /pacemaker_restart_bundle.sh ovn-dbs-bundle ovn_dbs
-            image: {get_param: ContainerOvnDbsConfigImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - if:
-                  - internal_tls_enabled
-                  -
-                    - /etc/pki/tls/certs/ovn_dbs.crt:/etc/pki/tls/certs/ovn_dbs.crt:ro
-                    - /etc/pki/tls/private/ovn_dbs.key:/etc/pki/tls/private/ovn_dbs.key:ro
-                  - null
           ovn_dbs_init_bundle:
-            start_order: 1
+            start_order: 0
             detach: false
             net: host
             ipc: host
@@ -209,8 +234,8 @@ outputs:
               list_concat:
                 - - '/container_puppet_apply.sh'
                   - '3'
-                  - 'file,file_line,concat,augeas,pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation,ovn_dbs_remove_old_cruft'
-                  - 'include ::tripleo::profile::base::pacemaker;include ::tripleo::profile::pacemaker::ovn_dbs_bundle'
+                  - 'ovn_dbs_remove_old_cruft'
+                  - 'include tripleo::profile::pacemaker::ovn_dbs_bundle'
                 - if:
                   - puppet_debug_enabled
                   - - '--debug'
@@ -239,27 +264,48 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/openvswitch, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/openvswitch/ovn, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/openvswitch, 'setype': openvswitch_log_t }
-        - name: openvswitch logs readme
-          copy:
-            dest: /var/log/openvswitch/readme.txt
-            content: |
-              Log files from openvswitch containers can be found under
-              /var/log/containers/openvswitch.
-          ignore_errors: true
+            - { 'path': /var/log/containers/openvswitch, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/openvswitch/ovn, 'setype': container_file_t }
       deploy_steps_tasks:
         - name: OVN DBS tag container image for pacemaker
           when: step|int == 1
           import_role:
-            name: tripleo-container-tag
+            name: tripleo_container_tag
           vars:
             container_image: {get_param: ContainerOvnDbsImage}
             container_image_latest: *ovn_dbs_image_pcmklatest
+        - name: OVNDbs HA Wrappers Step
+          when: step|int == 3
+          block: &ovn_dbs_puppet_bundle
+            - name: Ovn dbs puppet bundle
+              import_role:
+                name: tripleo_ha_wrapper
+              vars:
+                tripleo_ha_wrapper_service_name: ovn_dbs
+                tripleo_ha_wrapper_resource_name: ovndbs_servers
+                tripleo_ha_wrapper_bundle_name: ovn-dbs-bundle
+                tripleo_ha_wrapper_resource_state: Slave Master
+                tripleo_ha_wrapper_puppet_config_volume: ovn_dbs
+                tripleo_ha_wrapper_puppet_execute: 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::ovn_dbs_bundle'
+                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
 
       update_tasks:
+        - name: Tear-down non-HA ovn-dbs containers
+          when:
+            - step|int == 1
+          block: &ovn_dbs_teardown_nonha
+            - name: Remove non-HA ovn-dbs containers
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_container_cli: "{{ container_cli }}"
+                tripleo_containers_to_rm:
+                  - ovn_north_db_server
+                  - ovn_south_db_server
+                  - ovn_northd
         # When a schema change happens, the newer slaves don't connect
         # back to the older master and end up timing out.  So we clean
         # up the error here until we get a fix for
@@ -277,18 +323,16 @@ outputs:
           shell: "pcs resource ban ovn-dbs-bundle $(hostname | cut -d. -f1)"
           when:
             - step|int == 1
-        - name: Get docker ovn-dbs image
-          set_fact:
-            ovn_dbs_image: {get_param: ContainerOvnDbsImage}
-            ovn_dbs_image_latest: *ovn_dbs_image_pcmklatest
-        - name: set is_ovn_dbs_bootstrap_node fact
-          set_fact: is_ovn_dbs_bootstrap_node={{ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower}}
         - name: ovn-dbs fetch and retag container image for pacemaker
           when:
             - step|int == 3
           block: &ovn_dbs_fetch_retag_container_tasks
             - name: Pull latest ovn-dbs images
               command: "{{container_cli}} pull {{ovn_dbs_image}}"
+              register: result
+              retries: 3
+              delay: 3
+              until: result.rc == 0
             - name: Get previous ovn_dbs image id
               shell: "{{container_cli}} inspect --format '{{'{{'}}.Id{{'}}'}}' {{ovn_dbs_image_latest}}"
               register: old_ovn_dbs_image_id
@@ -298,25 +342,15 @@ outputs:
               register: new_ovn_dbs_image_id
             - name: Retag pcmklatest to latest ovn_dbs image
               include_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{ovn_dbs_image}}"
                 container_image_latest: "{{ovn_dbs_image_latest}}"
               when:
                 - old_ovn_dbs_image_id.stdout != new_ovn_dbs_image_id.stdout
-            - block:
-                - name: Get a list of containers using ovn-dbs image
-                  shell: "{{container_cli}} ps -a -q -f 'ancestor={{old_ovn_dbs_image_id.stdout}}'"
-                  register: ovn_dbs_containers_to_destroy
-                # It will be recreated with the deploy step.
-                - name: Remove any containers using the same ovn-dbs image
-                  shell: "{{container_cli}} rm -fv {{item}}"
-                  with_items: "{{ ovn_dbs_containers_to_destroy.stdout_lines }}"
-                - name: Remove previous ovn-dbs images
-                  shell: "{{container_cli}} rmi -f {{old_ovn_dbs_image_id.stdout}}"
-              when:
-                - old_ovn_dbs_image_id.stdout != ''
-                - old_ovn_dbs_image_id.stdout != new_ovn_dbs_image_id.stdout
+          vars:
+            ovn_dbs_image: {get_param: ContainerOvnDbsImage}
+            ovn_dbs_image_latest: *ovn_dbs_image_pcmklatest
         # We remove any leftover error and remove the ban.
         - name: Ensure the cluster converge back even in case of schema change
           shell: "pcs resource cleanup ovn-dbs-bundle"
@@ -334,7 +368,7 @@ outputs:
         - name: Update ovn-dbs-bundle resource to use pcmklatest tag image if not used
           when:
             - step|int == 5
-            - is_ovn_dbs_bootstrap_node
+            - ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower
           block:
             - name: Get the present image used by ovn-dbs-bundle
               shell: "pcs resource config ovn-dbs-bundle | grep -Eo 'image=[^ ]+' | awk -F= '{print $2;}'"
@@ -344,8 +378,21 @@ outputs:
                   command: "pcs resource bundle update ovn-dbs-bundle container image={{ovn_dbs_image_latest}}"
               when:
                 - ovn_dbs_current_image.stdout != ovn_dbs_image_latest
+          vars:
+            ovn_dbs_image_latest: *ovn_dbs_image_pcmklatest
+
+      post_update_tasks:
+        - name: Ovn dbs bundle post update
+          when: step|int == 1
+          block: *ovn_dbs_puppet_bundle
+          vars:
+            tripleo_ha_wrapper_minor_update: true
 
       upgrade_tasks:
+        - name: Tear-down non-HA ovn-dbs container
+          when:
+            - step|int == 0
+          block: *ovn_dbs_teardown_nonha
         - name: Prepare switch of ovn-dbs image name
           when:
             - step|int == 0
@@ -361,7 +408,7 @@ outputs:
                 ovn_dbs_image_current: "{{ovn_dbs_image_current_res.stdout}}"
             - name: Temporarily tag the current ovn_dbs image id with the upgraded image name
               import_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{ovn_dbs_image_current}}"
                 container_image_latest: "{{ovn_dbs_image_latest}}"
@@ -382,13 +429,10 @@ outputs:
             - name: Set fact ovn_dbs_pcs_res
               set_fact:
                 ovn_dbs_pcs_res: "{{ ovn_dbs_pcs_result.rc == 0 }}"
-            - name: set is_ovn_dbs_bootstrap_node fact
-              tags: common
-              set_fact: is_ovn_dbs_bootstrap_node={{ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower}}
         - name: Update ovn_dbs pcs resource bundle for new container image
           when:
             - step|int == 1
-            - is_ovn_dbs_bootstrap_node
+            - ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower
             - ovn_dbs_pcs_res|bool
             - ovn_dbs_image_current != ovn_dbs_image_latest
           block:
@@ -411,8 +455,10 @@ outputs:
               register: output
               retries: 5
               until: output.rc == 0
-        - when:
+        - name: Create hiera data to upgrade ovn_dbs in a stepwise manner.
+          when:
             - step|int == 1
+            - cluster_recreate|bool
           block:
             - name: set ovn_dbs upgrade node facts in a single-node environment
               set_fact:
@@ -425,11 +471,8 @@ outputs:
                 cacheable: no
               when:
                 - groups['ovn_dbs'] | length > 1
-                - item.split('.')[0] in ansible_limit.split(',')
-              loop: "{{ ovn_dbs_short_node_names }}"
-
-            - debug:
-                msg: "Prepare ovn_dbs upgrade for {{ ovn_dbs_short_node_names_upgraded }}"
+                - item.split('.')[0] in ansible_limit.split(':')
+              loop: "{{ ovn_dbs_short_node_names | default([]) }}"
             - fail:
                 msg: >
                   You can't upgrade ovn_dbs without staged
@@ -438,23 +481,26 @@ outputs:
               when: >-
                 ovn_dbs_short_node_names_upgraded is not defined or
                 ovn_dbs_short_node_names_upgraded | length == 0
-
+            - debug:
+                msg: "Prepare ovn_dbs upgrade for {{ ovn_dbs_short_node_names_upgraded }}"
             - name: remove ovn_dbs init container on upgrade-scaleup to force re-init
-              shell: |
-                if podman inspect ovn_dbs_init_bundle &> /dev/null; then
-                    podman rm ovn_dbs_init_bundle
-                fi
-              when: ovn_dbs_short_node_names_upgraded | length > 1
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_containers_to_rm:
+                  - ovn_dbs_init_bundle
+              when:
+                - ovn_dbs_short_node_names_upgraded | length > 1
             - name: add the ovn_dbs short name to hiera data for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: set.yml
               vars:
                 tripleo_upgrade_key: ovn_dbs_short_node_names_override
                 tripleo_upgrade_value: "{{ovn_dbs_short_node_names_upgraded}}"
             - name: remove the extra hiera data needed for the upgrade.
               include_role:
-                name: tripleo-upgrade-hiera
+                name: tripleo_upgrade_hiera
                 tasks_from: remove.yml
               vars:
                 tripleo_upgrade_key: ovn_dbs_short_node_names_override
@@ -463,3 +509,13 @@ outputs:
           when:
             - step|int == 3
           block: *ovn_dbs_fetch_retag_container_tasks
+
+      post_upgrade_tasks:
+        - name: Restart ovn-dbs service (pacemaker)
+          when:
+            - step|int == 1
+            - ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower
+          pacemaker_resource:
+            resource: ovn-dbs-bundle
+            state: restart
+            wait_for_resource: true

@@ -53,9 +53,17 @@ parameters:
                  a config change is detected and the resource is being restarted
     type: number
 
+  ContainerCli:
+    type: string
+    default: 'podman'
+    description: CLI tool used to manage containers.
+    constraints:
+      - allowed_values: ['docker', 'podman']
+
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
 
 outputs:
   container_config_scripts:
@@ -103,6 +111,22 @@ outputs:
             template: { get_file: ../container_config_scripts/pacemaker_restart_bundle.sh }
             params:
               __PCMKTIMEOUT__: {get_param: PcmkConfigRestartTimeout}
+      pacemaker_wait_bundle.sh:
+        mode: "0755"
+        content:
+          str_replace:
+            template: { get_file: ../container_config_scripts/pacemaker_wait_bundle.sh }
+            params:
+              __PCMKTIMEOUT__: {get_param: PcmkConfigRestartTimeout}
+      wait-port-and-run.sh:
+        mode: "0755"
+        content: { get_file: ../container_config_scripts/wait-port-and-run.sh }
+      pacemaker_resource_lock.sh:
+        mode: "0755"
+        content: { get_file: ../container_config_scripts/pacemaker_resource_lock.sh }
+      pacemaker_mutex_restart_bundle.sh:
+        mode: "0755"
+        content: { get_file: ../container_config_scripts/pacemaker_mutex_restart_bundle.sh }
 
   volumes_base:
     description: Base volume list
@@ -132,20 +156,22 @@ outputs:
     value:
       list_concat:
         - *volumes_base
-        - - /etc/ssh/ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
-          # required for bootstrap_host_exec
-          - /etc/puppet:/etc/puppet:ro
+        # required for bootstrap_host_exec
+        - - /etc/puppet:/etc/puppet:ro
 
   pacemaker_restart_volumes:
     description: Common volumes for the pacemaker restart containers.
     value:
       list_concat:
         - *volumes_base
-        - - /var/lib/container-config-scripts/pacemaker_restart_bundle.sh:/pacemaker_restart_bundle.sh:ro
-          - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+        - - /var/lib/container-config-scripts:/var/lib/container-config-scripts:ro
           - /dev/shm:/dev/shm:rw
           # required for bootstrap_host_exec, facter
           - /etc/puppet:/etc/puppet:ro
+        - if:
+          - docker_enabled
+          - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
+          - null
 
   container_puppet_apply_volumes:
     description: Common volumes needed to run the container_puppet_apply.sh from container_config_scripts

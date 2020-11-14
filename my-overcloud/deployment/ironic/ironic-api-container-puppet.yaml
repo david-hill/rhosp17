@@ -36,6 +36,12 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
   IronicPassword:
     description: The password for the Ironic service and db account, used by the Ironic services
     type: string
@@ -100,6 +106,25 @@ outputs:
     description: Role data for the Ironic API role.
     value:
       service_name: ironic_api
+      firewall_rules:
+        '133 ironic api':
+          dport:
+            - 6385
+            - 13385
+      keystone_resources:
+        ironic:
+          endpoints:
+            public: {get_param: [EndpointMap, IronicPublic, uri_no_suffix]}
+            internal: {get_param: [EndpointMap, IronicInternal, uri_no_suffix]}
+            admin: {get_param: [EndpointMap, IronicAdmin, uri_no_suffix]}
+          users:
+            ironic:
+              roles:
+               - admin
+               - service
+              password: {get_param: IronicPassword}
+          region: {get_param: KeystoneRegion}
+          service: 'baremetal'
       monitoring_subscription: {get_param: MonitoringSubscriptionIronicApi}
       config_settings:
         map_merge:
@@ -117,6 +142,8 @@ outputs:
             ironic::api::authtoken::username: 'ironic'
             ironic::api::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             ironic::api::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+            ironic::api::authtoken::region_name: {get_param: KeystoneRegion }
+            ironic::api::authtoken::interface: 'internal'
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -152,22 +179,8 @@ outputs:
             ironic::cors::allow_methods: 'GET,POST,PUT,DELETE,OPTIONS,PATCH'
             ironic::cors::allow_headers: 'Content-Type,Cache-Control,Content-Language,Expires,Last-Modified,Pragma,X-Auth-Token'
             ironic::cors::expose_headers: 'Content-Type,Cache-Control,Content-Language,Expires,Last-Modified,Pragma'
-
-            tripleo::ironic_api::firewall_rules:
-              '133 ironic api':
-                dport:
-                  - 6385
-                  - 13385
           - apache::default_vhost: false
       service_config_settings:
-        keystone:
-          ironic::keystone::auth::admin_url: {get_param: [EndpointMap, IronicAdmin, uri_no_suffix]}
-          ironic::keystone::auth::internal_url: {get_param: [EndpointMap, IronicInternal, uri_no_suffix]}
-          ironic::keystone::auth::public_url: {get_param: [EndpointMap, IronicPublic, uri_no_suffix]}
-          ironic::keystone::auth::auth_name: 'ironic'
-          ironic::keystone::auth::password: {get_param: IronicPassword }
-          ironic::keystone::auth::tenant: 'service'
-          ironic::keystone::auth::region: {get_param: KeystoneRegion}
         mysql:
           ironic::db::mysql::password: {get_param: IronicPassword}
           ironic::db::mysql::user: ironic
@@ -183,7 +196,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include ::tripleo::profile::base::ironic::api
+            - - include tripleo::profile::base::ironic::api
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerIronicApiConfigImage}
       kolla_config:
@@ -192,6 +205,13 @@ outputs:
           config_files:
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
+              merge: false
+              preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
+              dest: "/etc/httpd/conf.modules.d"
+              # TODO(emilien) remove optional flag once we get a promotion
+              # https://launchpad.net/bugs/1884115
+              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -231,6 +251,8 @@ outputs:
                   - /var/log/containers/httpd/ironic-api:/var/log/httpd:z
                   - /var/lib/config-data/ironic_api/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
             command: "/usr/bin/bootstrap_host_exec ironic_api su ironic -s /bin/bash -c 'ironic-dbsync --config-file /etc/ironic/ironic.conf'"
+            environment:
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           ironic_api:
             start_order: 10
@@ -245,19 +267,17 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ironic_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ironic_api/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ironic_api:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/ironic:/var/log/ironic:z
                   - /var/log/containers/httpd/ironic-api:/var/log/httpd:z
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                      - ''
-                  -
-                    if:
-                      - internal_tls_enabled
-                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                      - ''
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - []
+                - if:
+                    - internal_tls_enabled
+                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -266,20 +286,13 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/ironic, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/containers/httpd/ironic-api, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ironic, 'setype': svirt_sandbox_file_t }
-        - name: ironic logs readme
-          copy:
-            dest: /var/log/ironic/readme.txt
-            content: |
-              Log files from ironic containers can be found under
-              /var/log/containers/ironic and /var/log/containers/httpd/ironic-*.
-          ignore_errors: true
+            - { 'path': /var/log/containers/ironic, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/containers/httpd/ironic-api, 'setype': container_file_t, 'mode': '0750' }
       external_upgrade_tasks:
         - when: step|int == 1
-          block:
+          block: &ironic_online_db_migration
             - name: Online data migration for Ironic
               command: "{{ container_cli }} exec ironic_api ironic-dbsync --config-file /etc/ironic/ironic.conf online_data_migrations"
               delegate_to: "{{ groups['ironic_api'][0] }}"
@@ -287,39 +300,6 @@ outputs:
               tags:
                 - online_upgrade
                 - online_upgrade_ironic
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: Check if ironic_api is deployed
-              command: systemctl is-enabled --quiet openstack-ironic-api
-              ignore_errors: True
-              register: ironic_api_enabled_result
-            - name: Set fact ironic_api_enabled
-              set_fact:
-                ironic_api_enabled: "{{ ironic_api_enabled_result.rc == 0 }}"
-        - name: Stop openstack-ironic-api
-          service: name=openstack-ironic-api state=stopped enabled=no
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - ironic_api_enabled|bool
-        - name: Ironic package update
-          package:
-            name: 'openstack-ironic*'
-            state: latest
-          when:
-            - step|int == 6
-            - is_bootstrap_node|bool
-        - name: Synchronize the database
-          command: ironic-dbsync --config-file /etc/ironic/ironic.conf upgrade
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool
-        - name: Do online data migration
-          command: ironic-dbsync --config-file /etc/ironic/ironic.conf online_data_migrations
-          when:
-            - step|int == 8
-            - is_bootstrap_node|bool
-            - release == 'pike'
+      external_update_tasks:
+        - when: step|int == 1
+          block: *ironic_online_db_migration

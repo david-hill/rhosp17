@@ -94,7 +94,7 @@ outputs:
         config_volume: ceilometer
         puppet_tags: ceilometer_config
         step_config: |
-          include ::tripleo::profile::base::ceilometer::agent::polling
+          include tripleo::profile::base::ceilometer::agent::polling
         config_image: {get_param: ContainerCeilometerConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/ceilometer-agent-ipmi.json:
@@ -127,7 +127,7 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/ceilometer-agent-ipmi.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/ceilometer/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/ceilometer:/var/lib/kolla/config_files/src:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -136,31 +136,6 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode }}"
           with_items:
-            - { 'path': /var/log/containers/ceilometer, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/ceilometer, 'setype': svirt_sandbox_file_t }
-        - name: ceilometer logs readme
-          copy:
-            dest: /var/log/ceilometer/readme.txt
-            content: |
-              Log files from ceilometer containers can be found under
-              /var/log/containers/ceilometer.
-          ignore_errors: true
-      fast_forward_upgrade_tasks:
-        - when:
-            - step|int == 0
-            - release == 'ocata'
-          block:
-            - name: FFU check if openstack-ceilometer-ipmi is enabled
-              command: systemctl is-enabled openstack-ceilometer-ipmi
-              ignore_errors: True
-              register: ceilometer_ipmi_enabled_result
-            - name: Set fact ceilometer_ipmi_enabled
-              set_fact:
-                ceilometer_ipmi_enabled: "{{ ceilometer_ipmi_enabled_result.rc == 0 }}"
-        - name: FFU stop and disable openstack-ceilometer-ipmi service
-          when:
-            - step|int == 1
-            - release == 'ocata'
-            - ceilometer_ipmi_enabled|bool
-          service: name=openstack-ceilometer-ipmi state=stopped enabled=no
+            - { 'path': /var/log/containers/ceilometer, 'setype': container_file_t, 'mode': '0750' }

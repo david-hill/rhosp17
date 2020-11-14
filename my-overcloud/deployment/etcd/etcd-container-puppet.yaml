@@ -46,15 +46,42 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
+  EnableEtcdInternalTLS:
+    description: Controls whether etcd and the cinder-volume service use TLS
+                 for cinder's lock manager, even when the rest of the internal
+                 API network is using TLS.
+    type: boolean
+    default: false
+  InternalTLSCAFile:
+    default: '/etc/ipa/ca.crt'
+    type: string
+    description: Specifies the default CA cert to use if TLS is used for
+                 services in the internal network.
+  Debug:
+    default: false
+    description: Set to True to enable debugging on all services.
+    type: boolean
 
 conditions:
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  internal_tls_enabled:
+    and:
+      - {equals: [{get_param: EnableInternalTLS}, true]}
+      - {equals: [{get_param: EnableEtcdInternalTLS}, true]}
+
+resources:
+  ContainersCommon:
+    type: ../containers-common.yaml
 
 outputs:
   role_data:
     description: Role data for the etcd role.
     value:
       service_name: etcd
+      firewall_rules:
+        '141 etcd':
+          dport:
+            - 2379
+            - 2380
       monitoring_subscription: {get_param: MonitoringSubscriptionEtcd}
       config_settings:
         map_merge:
@@ -65,11 +92,6 @@ outputs:
                 "%{hiera('fqdn_$NETWORK')}"
               params:
                 $NETWORK: {get_param: [ServiceNetMap, EtcdNetwork]}
-          # NOTE: bind IP is found in hiera replacing the network name with the local node IP
-          # for the given network; replacement examples (eg. for internal_api):
-          # internal_api -> IP
-          # internal_api_uri -> [IP]
-          # internal_api_subnet - > IP/CIDR
           tripleo::profile::base::etcd::bind_ip:
             str_replace:
               template:
@@ -78,13 +100,9 @@ outputs:
                 $NETWORK: {get_param: [ServiceNetMap, EtcdNetwork]}
           tripleo::profile::base::etcd::client_port: '2379'
           tripleo::profile::base::etcd::peer_port: '2380'
+          etcd::debug: {get_param: Debug}
           etcd::initial_cluster_token: {get_param: EtcdInitialClusterToken}
           etcd::manage_package: false
-          tripleo::etcd::firewall_rules:
-            '141 etcd':
-              dport:
-                - 2379
-                - 2380
           etcd::manage_service: false
         -
           if:
@@ -103,7 +121,23 @@ outputs:
                   template: "etcd/%{hiera('fqdn_NETWORK')}"
                   params:
                     NETWORK: {get_param: [ServiceNetMap, EtcdNetwork]}
-          - {}
+              dnsnames:
+                - str_replace:
+                    template: "%{hiera('fqdn_NETWORK')}"
+                    params:
+                      NETWORK: {get_param: [ServiceNetMap, EtcdNetwork]}
+                - str_replace:
+                    template:
+                      "%{hiera('NETWORK')}"
+                    params:
+                      NETWORK: {get_param: [ServiceNetMap, EtcdNetwork]}
+              postsave_cmd: '/usr/bin/certmonger-etcd-refresh.sh'
+            etcd::trusted_ca_file: {get_param: InternalTLSCAFile}
+            etcd::peer_trusted_ca_file: {get_param: InternalTLSCAFile}
+          -
+            # Ensure etcd and cinder-volume aren't configured to use TLS
+            tripleo::profile::base::etcd::enable_internal_tls: false
+            tripleo::profile::base::cinder::volume::enable_internal_tls: false
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: etcd
@@ -112,7 +146,7 @@ outputs:
           list_join:
             - "\n"
             - - "['Etcd_key'].each |String $val| { noop_resource($val) }"
-              - "include ::tripleo::profile::base::etcd"
+              - "include tripleo::profile::base::etcd"
       kolla_config:
         /var/lib/kolla/config_files/etcd.json:
           command: /usr/bin/etcd --config-file /etc/etcd/etcd.yml
@@ -121,10 +155,19 @@ outputs:
               dest: "/"
               merge: true
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src-tls/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
+              optional: true
           permissions:
             - path: /var/lib/etcd
               owner: etcd:etcd
               recurse: true
+            - path: /etc/pki/tls/certs/etcd.crt
+              owner: etcd:etcd
+            - path: /etc/pki/tls/private/etcd.key
+              owner: etcd:etcd
       docker_config:
         step_2:
           etcd:
@@ -135,10 +178,19 @@ outputs:
             healthcheck:
               test: /openstack/healthcheck
             volumes:
-              - /var/lib/etcd:/var/lib/etcd
-              - /etc/localtime:/etc/localtime:ro
-              - /var/lib/kolla/config_files/etcd.json:/var/lib/kolla/config_files/config.json:ro
-              - /var/lib/config-data/puppet-generated/etcd/:/var/lib/kolla/config_files/src:ro
+              list_concat:
+                - {get_attr: [ContainersCommon, volumes]}
+                -
+                  - /var/lib/etcd:/var/lib/etcd
+                  - /var/lib/kolla/config_files/etcd.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/etcd/:/var/lib/kolla/config_files/src:ro
+                -
+                  if:
+                    - internal_tls_enabled
+                    -
+                      - /etc/pki/tls/certs/etcd.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/etcd.crt:ro
+                      - /etc/pki/tls/private/etcd.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/etcd.key:ro
+                    - null
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       container_puppet_tasks:
@@ -147,17 +199,31 @@ outputs:
           config_volume: 'etcd_init_tasks'
           puppet_tags: 'etcd_key'
           step_config: |
-              include ::tripleo::profile::base::etcd
+              include tripleo::profile::base::etcd
           config_image: *etcd_config_image
           volumes:
             - /var/lib/config-data/etcd/etc/etcd/:/etc/etcd:ro
             - /var/lib/etcd:/var/lib/etcd:ro
       host_prep_tasks:
-        - name: create /var/lib/etcd
-          file:
-            path: /var/lib/etcd
-            state: directory
-            setype: svirt_sandbox_file_t
+        list_concat:
+          -
+            - name: create /var/lib/etcd
+              file:
+                path: /var/lib/etcd
+                state: directory
+                setype: container_file_t
+          -
+            if:
+              - internal_tls_enabled
+              -
+                - name: check if ipa server has required permissions
+                  import_role:
+                    name: tls_everywhere
+                    tasks_from: ipa-server-check
+                  tags:
+                    - opendev-validation
+                    - opendev-validation-tls-everywhere
+              - null
       upgrade_tasks: []
       metadata_settings:
         if:

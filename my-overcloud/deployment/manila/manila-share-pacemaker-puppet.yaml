@@ -10,6 +10,20 @@ parameters:
   ContainerManilaConfigImage:
     description: image
     type: string
+  ClusterCommonTag:
+    default: false
+    description: When set to false, a pacemaker service is configured
+                 to use a floating tag for its container image name,
+                 e.g. 'REGISTRY/NAMESPACE/IMAGENAME:pcmklatest'. When
+                 set to true, the service uses a floating prefix as
+                 well, e.g. 'cluster.common.tag/IMAGENAME:pcmklatest'.
+    type: boolean
+  ClusterFullTag:
+    default: false
+    description: When set to true, the pacemaker service uses a fully
+                 constant tag for its container image name, e.g.
+                 'cluster.common.tag/SERVICENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -54,8 +68,9 @@ parameters:
       perform configuration on a Heat stack-update.
 
 conditions:
-  puppet_debug_enabled: {get_param: ConfigDebug}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
+  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
+  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
 
 resources:
 
@@ -87,12 +102,18 @@ outputs:
         map_merge:
           - get_attr: [ManilaShareContainerBase, role_data, config_settings]
           - tripleo::profile::pacemaker::manila::share_bundle::manila_share_docker_image: &manila_share_image_pcmklatest
-              list_join:
-                - ':'
-                - - yaql:
-                      data: {get_param: ContainerManilaShareImage}
-                      expression: $.data.rightSplit(separator => ":", maxSplits => 1)[0]
-                  - 'pcmklatest'
+              if:
+                - common_tag_full
+                - "cluster.common.tag/manila-share:pcmklatest"
+                - yaql:
+                    data:
+                      if:
+                        - common_tag_enabled
+                        - yaql:
+                            data: {get_param: ContainerManilaShareImage}
+                            expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                        - {get_param: ContainerManilaShareImage}
+                    expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::manila::share_bundle::docker_volumes: {get_attr: [ManilaCommon, manila_share_volumes]}
             tripleo::profile::pacemaker::manila::share_bundle::docker_environment: {get_attr: [ManilaCommon, manila_share_environment]}
             tripleo::profile::pacemaker::manila::share_bundle::container_backend: {get_param: ContainerCli}
@@ -107,7 +128,7 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - "include ::tripleo::profile::pacemaker::manila"
+            - - "include tripleo::profile::pacemaker::manila"
               - {get_attr: [MySQLClient, role_data, step_config]}
         config_image: {get_param: ContainerManilaConfigImage}
       kolla_config:
@@ -138,67 +159,16 @@ outputs:
             volumes:
               - /var/log/containers/manila:/var/log/manila:z
             command: ['/bin/bash', '-c', 'chown -R manila:manila /var/log/manila']
-        step_5:
-          manila_share_restart_bundle:
-            start_order: 0
-            config_volume: manila
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            environment:
-              TRIPLEO_MINOR_UPDATE: ''
-            command: /pacemaker_restart_bundle.sh openstack-manila-share manila_share
-            image: {get_param: ContainerManilaShareImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/manila/:/var/lib/kolla/config_files/src:ro
-          manila_share_init_bundle:
-            start_order: 1
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            command: # '/container_puppet_apply.sh "STEP" "TAGS" "CONFIG" "DEBUG"'
-              list_concat:
-                - - '/container_puppet_apply.sh'
-                  - '5'
-                  - 'pacemaker_constraint,file,file_line,concat,augeas,pacemaker::resource::bundle,pacemaker::property,pacemaker::constraint::location'
-                  - 'include ::tripleo::profile::base::pacemaker;include ::tripleo::profile::pacemaker::manila::share_bundle'
-                - if:
-                  - puppet_debug_enabled
-                  - - '--debug'
-                  - - ''
-            image: {get_param: ContainerManilaShareImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, container_puppet_apply_volumes]}
-                - if:
-                  - docker_enabled
-                  - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - null
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
       host_prep_tasks:
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/manila, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/manila, 'setype': svirt_sandbox_file_t }
-        - name: manila logs readme
-          copy:
-            dest: /var/log/manila/readme.txt
-            content: |
-              Log files from manila containers can be found under
-              /var/log/containers/manila and /var/log/containers/httpd/manila-api.
-          ignore_errors: true
+            - { 'path': /var/log/containers/manila, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/manila, 'setype': container_file_t }
         - name: ensure ceph configurations exist
           file:
             path: /etc/ceph
@@ -207,10 +177,26 @@ outputs:
         - name: Manila Share tag container image for pacemaker
           when: step|int == 1
           import_role:
-            name: tripleo-container-tag
+            name: tripleo_container_tag
           vars:
             container_image: {get_param: ContainerManilaShareImage}
             container_image_latest: *manila_share_image_pcmklatest
+        - name: Manila-Share HA Wrappers Step
+          when: step|int == 5
+          block: &manila_share_puppet_bundle
+            - name: Manila-Share puppet bundle
+              import_role:
+                name: tripleo_ha_wrapper
+              vars:
+                tripleo_ha_wrapper_service_name: manila_share
+                tripleo_ha_wrapper_resource_name: openstack-manila-share
+                tripleo_ha_wrapper_bundle_name: openstack-manila-share
+                tripleo_ha_wrapper_resource_state: _ Started
+                tripleo_ha_wrapper_puppet_config_volume: manila
+                tripleo_ha_wrapper_puppet_execute: 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::manila::share_bundle'
+                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
+
       update_tasks:
         - name: manila_share fetch and retag container image for pacemaker
           when: step|int == 2
@@ -221,6 +207,10 @@ outputs:
                 manila_share_image_latest: *manila_share_image_pcmklatest
             - name: Pull latest manila_share images
               command: "{{container_cli}} pull {{manila_share_image}}"
+              register: result
+              retries: 3
+              delay: 3
+              until: result.rc == 0
             - name: Get previous manila_share image id
               shell: "{{container_cli}} inspect --format '{{'{{'}}.Id{{'}}'}}' {{manila_share_image_latest}}"
               register: old_manila_share_image_id
@@ -230,25 +220,19 @@ outputs:
               register: new_manila_share_image_id
             - name: Retag pcmklatest to latest manila_share image
               include_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{manila_share_image}}"
                 container_image_latest: "{{manila_share_image_latest}}"
               when:
                 - old_manila_share_image_id.stdout != new_manila_share_image_id.stdout
-            - block:
-                - name: Get a list of containers using manila_share image
-                  shell: "{{container_cli}} ps -a -q -f 'ancestor={{old_manila_share_image_id.stdout}}'"
-                  register: manila_share_containers_to_destroy
-                # It will be recreated with the delpoy step.
-                - name: Remove any containers using the same manila_share image
-                  shell: "{{container_cli}} rm -fv {{item}}"
-                  with_items: "{{ manila_share_containers_to_destroy.stdout_lines }}"
-                - name: Remove previous manila_share images
-                  shell: "{{container_cli}} rmi -f {{manila_share_image_id.stdout}}"
-              when:
-                - old_manila_share_image_id.stdout != ''
-                - old_manila_share_image_id.stdout != new_manila_share_image_id.stdout
+
+      post_update_tasks:
+        - name: Manila-share bundle post update
+          when: step|int == 1
+          block: *manila_share_puppet_bundle
+          vars:
+            tripleo_ha_wrapper_minor_update: true
 
       upgrade_tasks:
         - name: Prepare switch of manila_share image name
@@ -265,7 +249,7 @@ outputs:
                 manila_share_image_current: "{{manila_share_image_current_res.stdout}}"
             - name: Temporarily tag the current manila_share image id with the upgraded image name
               import_role:
-                name: tripleo-container-tag
+                name: tripleo_container_tag
               vars:
                 container_image: "{{manila_share_image_current}}"
                 container_image_latest: "{{manila_share_image_latest}}"
@@ -314,40 +298,71 @@ outputs:
               register: output
               retries: 5
               until: output.rc == 0
+        - name: Create hiera data to upgrade manila_share in a stepwise manner.
+          when:
+            - step|int == 1
+            - cluster_recreate|bool
+          block:
+            - name: set manila_share upgrade node facts in a single-node environment
+              set_fact:
+                manila_share_short_node_names_upgraded: "{{ manila_share_short_node_names }}"
+                manila_share_node_names_upgraded: "{{ manila_share_node_names }}"
+                cacheable: no
+              when: groups['manila_share'] | length <= 1
+            - name: set manila_share upgrade node facts from the limit option
+              set_fact:
+                manila_share_short_node_names_upgraded: "{{ manila_share_short_node_names_upgraded|default([]) + [item.split('.')[0]] }}"
+                manila_share_node_names_upgraded: "{{ manila_share_node_names_upgraded|default([]) + [item] }}"
+                cacheable: no
+              when:
+                - groups['manila_share'] | length > 1
+                - item.split('.')[0] in ansible_limit.split(':')
+              loop: "{{ manila_share_node_names | default([]) }}"
+            - fail:
+                msg: >
+                  You can't upgrade manila_share without
+                  staged upgrade.  You need to use the limit option in order
+                  to do so.
+              when: >-
+                manila_share_short_node_names_upgraded is not defined or
+                manila_share_short_node_names_upgraded | length == 0 or
+                manila_share_node_names_upgraded is not defined or
+                manila_share_node_names_upgraded | length == 0
+            - debug:
+                msg: "Prepare manila_share upgrade for {{ manila_share_short_node_names_upgraded }}"
+            - name: remove manila_share init container on upgrade-scaleup to force re-init
+              include_role:
+                name: tripleo_container_rm
+              vars:
+                tripleo_containers_to_rm:
+                  - manila_share_init_bundle
+              when:
+                - manila_share_short_node_names_upgraded | length > 1
+            - name: add the manila_share short name to hiera data for the upgrade.
+              include_role:
+                name: tripleo_upgrade_hiera
+                tasks_from: set.yml
+              vars:
+                tripleo_upgrade_key: manila_share_short_node_names_override
+                tripleo_upgrade_value: "{{ manila_share_short_node_names_upgraded }}"
+            - name: add the manila_share long name to hiera data for the upgrade
+              include_role:
+                name: tripleo_upgrade_hiera
+                tasks_from: set.yml
+              vars:
+                tripleo_upgrade_key: manila_share_node_names_override
+                tripleo_upgrade_value: "{{ manila_share_node_names_upgraded }}"
+            - name: remove the extra hiera data needed for the upgrade.
+              include_role:
+                name: tripleo_upgrade_hiera
+                tasks_from: remove.yml
+              vars:
+                tripleo_upgrade_key: "{{ item }}"
+              loop:
+                - manila_share_short_node_names_override
+                - manila_share_node_names_override
+              when: manila_share_short_node_names_upgraded | length == manila_share_node_names | length
         - name: Retag the pacemaker image if containerized
           when:
             - step|int == 3
           block: *manila_share_fetch_retag_container_tasks
-
-      fast_forward_upgrade_tasks:
-        - name: Check cluster resource status
-          pacemaker_resource:
-            resource: openstack-manila-share
-            state: show
-            check_mode: false
-          ignore_errors: true
-          register: manila_share_res_result
-          when:
-            - step|int == 0
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-        - name: Set fact manila_share_res
-          set_fact:
-            manila_share_res: "{{ manila_share_res_result.rc == 0 }}"
-          when:
-            - step|int == 0
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-        - name: Disable the openstack-manila-share cluster resource
-          pacemaker_resource:
-            resource: openstack-manila-share
-            state: disable
-            wait_for_resource: true
-          register: manila_share_output
-          retries: 5
-          until: manila_share_output.rc == 0
-          when:
-            - step|int == 2
-            - release == 'ocata'
-            - is_bootstrap_node|bool
-            - manila_share_res|bool

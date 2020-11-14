@@ -5,6 +5,9 @@
   description: |
     Compute OvS DPDK RealTime Role
   CountDefault: 1
+  tags:
+    - compute
+    - dpdk
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -19,6 +22,7 @@
     NovaLibvirtRxQueueSize: 1024
     NovaLibvirtTxQueueSize: 1024
     NovaLibvirtMemStatsPeriodSeconds: 0
+    NovaComputeDisableIrqBalance: True
   update_serial: 25
   ServicesDefault:
     - OS::TripleO::Services::Aide
@@ -34,7 +38,6 @@
     - OS::TripleO::Services::ComputeNeutronL3Agent
     - OS::TripleO::Services::ComputeNeutronMetadataAgent
     - OS::TripleO::Services::ComputeNeutronOvsDpdk
-    - OS::TripleO::Services::Docker
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
@@ -52,7 +55,9 @@
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::OVNController
     - OS::TripleO::Services::OVNMetadataAgent
+    - OS::TripleO::Services::OvsDpdkNetcontrold
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar

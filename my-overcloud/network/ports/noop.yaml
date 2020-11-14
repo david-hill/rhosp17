@@ -29,6 +29,10 @@ parameters:
     description: Name of the port
     default: ''
     type: string
+  DnsName:
+    description: DNS name of the port
+    default: ''
+    type: string
   NetworkName: # Here for compatibility with vip.yaml
     description: Name of the network where the VIP will be created
     default: ctlplane
@@ -75,16 +79,3 @@ outputs:
             - - {get_param: ControlPlaneIP}
               - '/'
               - {get_param: ControlPlaneSubnetCidr}
-  host_routes: # Here for compatibility
-    description: Host routes of the ports subnet
-    value: []
-  mtu:
-    description: The maximum transmission unit (MTU)
-    value:
-          get_param: ControlPlaneMtu
-  gateway_ip: # Here for compatibility
-    description: Gateway IP of the ports subnet
-    value: ''
-  cidr:
-    description: CIDR of the ports subnet
-    value: {get_param: ControlPlaneSubnetCidr}

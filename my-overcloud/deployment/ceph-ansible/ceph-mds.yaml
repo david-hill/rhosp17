@@ -30,11 +30,6 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
-  CephMdsKey:
-    description: The cephx key for the MDS service. Can be created
-                 with ceph-authtool --gen-print-key.
-    type: string
-    hidden: true
   CephEnableDashboard:
     type: boolean
     default: false
@@ -66,7 +61,17 @@ outputs:
     description: Role data for the Ceph Metadata service.
     value:
       service_name: ceph_mds
-      upgrade_tasks: []
+      firewall_rules:
+        '112 ceph_mds':
+          dport:
+            list_concat:
+              - - '6800-7300'
+              - if:
+                - dashboard_enabled
+                - - '9100'
+                - []
+      upgrade_tasks: {get_attr: [CephBase, role_data, upgrade_tasks]}
+      post_upgrade_tasks: {get_attr: [CephBase, role_data, post_upgrade_tasks]}
       puppet_config:
         config_image: ''
         config_volume: ''
@@ -77,7 +82,10 @@ outputs:
         - {get_attr: [CephBase, role_data, external_deploy_tasks]}
         - - name: ceph_mds_external_deploy_init
             when: step|int == 1
-            tags: ceph
+            tags:
+              - ceph
+              - ceph_fstobs
+              - ceph_systemd
             block:
               - name: set ceph-ansible group vars mdss
                 set_fact:
@@ -88,15 +96,3 @@ outputs:
                   content: "{{ceph_ansible_group_vars_mdss|to_nice_yaml}}"
       external_update_tasks: {get_attr: [CephBase, role_data, external_update_tasks]}
       external_upgrade_tasks: {get_attr: [CephBase, role_data, external_upgrade_tasks]}
-      config_settings:
-        map_merge:
-        - tripleo::ceph_mds::firewall_rules:
-            '112 ceph_mds':
-              dport:
-                list_concat:
-                  - - '6800-7300'
-                  - if:
-                    - dashboard_enabled
-                    - - '9100'
-                    - []
-        - {}

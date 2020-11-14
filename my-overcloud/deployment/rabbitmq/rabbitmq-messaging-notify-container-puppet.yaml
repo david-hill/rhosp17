@@ -43,11 +43,6 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
-  InternalTLSCAFile:
-    default: '/etc/ipa/ca.crt'
-    type: string
-    description: Specifies the default CA cert to use if TLS is used for
-                 services in the internal network.
   NotifyPort:
     default: 5672
     description: The network port for messaging Notify backend
@@ -65,9 +60,20 @@ parameters:
     description: Messaging Notification client subscriber parameter to specify
                  an SSL connection to the messaging host.
     type: string
+  DeployIdentifier:
+    default: ''
+    type: string
+    description: >
+      Setting this to a unique value will re-run any deployment tasks which
+      perform configuration on a Heat stack-update.
 
 conditions:
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  rabbit_cookie_param_set:
+    not:
+      equals:
+      - {get_param: RabbitCookie}
+      - ''
 
 resources:
 
@@ -89,6 +95,13 @@ outputs:
     description: Role data for the Rabbitmq API role.
     value:
       service_name: oslo_messaging_notify
+      firewall_rules:
+        '109 rabbitmq':
+          dport:
+            - 4369
+            - {get_param: NotifyPort}
+            - 25672
+            - 25673-25683
       monitoring_subscription: {get_attr: [RabbitMQServiceBase, role_data, monitoring_subscription]}
       # RabbitMQ plugins initialization occurs on every node
       global_config_settings:
@@ -104,12 +117,6 @@ outputs:
           - get_attr: [RabbitMQServiceBase, role_data, config_settings]
           - rabbitmq::default_user: {get_param: NotifyUserName}
             rabbitmq::default_pass: {get_param: NotifyPassword}
-            tripleo::oslo_messaging_notify::firewall_rules:
-              '109 rabbitmq':
-                dport:
-                  - 4369
-                  - {get_param: NotifyPort}
-                  - 25672
             rabbitmq::port: {get_param: NotifyPort}
             rabbitmq::interface:
               str_replace:
@@ -163,7 +170,7 @@ outputs:
           list_join:
             - "\n"
             - - "['Rabbitmq_policy', 'Rabbitmq_user'].each |String $val| { noop_resource($val) }"
-              - "include ::tripleo::profile::base::rabbitmq"
+              - "include tripleo::profile::base::rabbitmq"
         config_image: &rabbitmq_config_image {get_param: ContainerRabbitmqConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/rabbitmq.json:
@@ -212,17 +219,12 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/rabbitmq.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/rabbitmq:/var/lib/kolla/config_files/src:ro
                   - /var/lib/rabbitmq:/var/lib/rabbitmq:z
                   - /var/log/containers/rabbitmq:/var/log/rabbitmq:z
                 - if:
                   - internal_tls_enabled
                   -
-                    - list_join:
-                      - ':'
-                      - - {get_param: InternalTLSCAFile}
-                        - {get_param: InternalTLSCAFile}
-                        - 'ro'
                     - /etc/pki/tls/certs/rabbitmq.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/rabbitmq.crt:ro
                     - /etc/pki/tls/private/rabbitmq.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/rabbitmq.key:ro
                   - null
@@ -231,13 +233,12 @@ outputs:
               KOLLA_BOOTSTRAP: true
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
+              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
               RABBITMQ_CLUSTER_COOKIE:
-                yaql:
-                  expression: $.data.passwords.where($ != '').first()
-                  data:
-                    passwords:
-                      - {get_param: RabbitCookie}
-                      - {get_param: [DefaultPasswords, rabbit_cookie]}
+                if:
+                  - rabbit_cookie_param_set
+                  - {get_param: RabbitCookie}
+                  - {get_param: [DefaultPasswords, rabbit_cookie]}
           rabbitmq:
             start_order: 2
             stop_grace_period: 60
@@ -252,17 +253,12 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
                   - /var/lib/kolla/config_files/rabbitmq.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/puppet-generated/rabbitmq/:/var/lib/kolla/config_files/src:ro
+                  - /var/lib/config-data/puppet-generated/rabbitmq:/var/lib/kolla/config_files/src:ro
                   - /var/lib/rabbitmq:/var/lib/rabbitmq:z
                   - /var/log/containers/rabbitmq:/var/log/rabbitmq:z
                 - if:
                   - internal_tls_enabled
                   -
-                    - list_join:
-                      - ':'
-                      - - {get_param: InternalTLSCAFile}
-                        - {get_param: InternalTLSCAFile}
-                        - 'ro'
                     - /etc/pki/tls/certs/rabbitmq.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/rabbitmq.crt:ro
                     - /etc/pki/tls/private/rabbitmq.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/rabbitmq.key:ro
                   - null
@@ -273,7 +269,7 @@ outputs:
         step_2:
           config_volume: 'rabbit_init_tasks'
           puppet_tags: 'rabbitmq_policy,rabbitmq_user'
-          step_config: 'include ::tripleo::profile::base::rabbitmq'
+          step_config: 'include tripleo::profile::base::rabbitmq'
           config_image: *rabbitmq_config_image
           volumes:
             - /var/lib/config-data/rabbitmq/etc/rabbitmq/:/etc/rabbitmq/:ro
@@ -292,21 +288,14 @@ outputs:
             path: "{{ item.path }}"
             state: directory
             setype: "{{ item.setype }}"
+            mode: "{{ item.mode|default(omit) }}"
           with_items:
-            - { 'path': /var/log/containers/rabbitmq, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/lib/rabbitmq, 'setype': svirt_sandbox_file_t }
-            - { 'path': /var/log/rabbitmq, 'setype': svirt_sandbox_file_t }
-        - name: rabbitmq logs readme
-          copy:
-            dest: /var/log/rabbitmq/readme.txt
-            content: |
-              Log files from rabbitmq containers can be found under
-              /var/log/containers/rabbitmq.
-          ignore_errors: true
+            - { 'path': /var/log/containers/rabbitmq, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/lib/rabbitmq, 'setype': container_file_t }
       upgrade_tasks: []
       update_tasks:
         # TODO: Are we sure we want to support this.  Rolling update
         # without pacemaker may fail.  Do we test this ?  In any case,
-        # this is under paunch control so the latest image should be
+        # this is under tripleo_container_manage control so the latest image should be
         # pulled in by the deploy steps.  Same question for other
         # usually managed by pacemaker container.

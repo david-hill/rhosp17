@@ -17,12 +17,10 @@ parameters:
     default: {'provider:physical_network': '{{network.name_lower}}', 'provider:network_type': 'flat'}
     description: Value specs for the {{network.name_lower}} network.
     type: json
-{%- if not ":" in network.ip_subnet and not network.ipv6 and not ipv6_override %}
   {{network.name}}NetEnableDHCP:
     default: false
-    description: Whether to enable DHCP on the associated subnet (IPv4 only).
+    description: Whether to enable DHCP on the associated subnet.
     type: boolean
-{%- endif %}
   {{network.name}}NetAdminStateUp:
     default: false
     description: The admin state of the network.
@@ -65,12 +63,10 @@ parameters:
 {%- endif %}
     description: default route for the {{network.name_lower}} network
     type: string
-{%- if network.vlan %}
   {{network.name}}NetworkVlanID:
     default: {{network.vlan|default(1)}}
     description: Vlan ID for the {{network.name_lower}} network traffic.
     type: number
-{%- endif %}
   {{network.name}}Routes:
     default: {{network.routes|default([])}}
     description: >
@@ -137,13 +133,32 @@ parameters:
       needed. Defaults to true. For multi-stack use cases where the network
       related resources have already been managed by a separate stack, this
       parameter can be set to false.
+  CloudDomain:
+    default: 'localdomain'
+    type: string
+    description: >
+      The DNS domain used for the hosts. This must match the
+      overcloud_domain_name configured on the undercloud.
+  NetworkDeletionPolicy:
+    description: >
+      Whether to retain or delete network resource on deletion of the stack
+    type: string
+    default: delete
+    constraints:
+      - allowed_values: [delete, retain]
+
 
 conditions:
   manage_networks: {get_param: ManageNetworks}
+  is_ipv6:
+    yaql:
+      expression: '":" in $.data'
+      data: {get_param: {{network.name}}NetCidr}
 
 resources:
   {{network.name}}Network:
     type: OS::Neutron::Net
+    deletion_policy: {get_param: NetworkDeletionPolicy}
     condition: manage_networks
 {%- if network.external_resource_network_id|default('') %}
     external_id: {{ network.external_resource_network_id }}
@@ -151,26 +166,34 @@ resources:
     properties:
       admin_state_up: {get_param: {{network.name}}NetAdminStateUp}
       name: {get_param: {{network.name}}NetName}
+      dns_domain:
+        list_join:
+          - '.'
+          - - {{network.name.lower()}}
+            - {get_param: CloudDomain}
+            - ''
       shared: {get_param: {{network.name}}NetShared}
       value_specs:
         map_merge:
           - {get_param: {{network.name}}NetValueSpecs}
           - {'mtu': {get_param: {{network.name}}Mtu}}
+      tags:
+        - tripleo_vip={{network.vip|default(false)}}
+{%- if network.service_net_map_replace|default('') %}
+        - tripleo_service_net_map_replace={{network.service_net_map_replace}}
+{%- endif %}
+{%- if network.ipv6 or ipv6_override %}
+        - tripleo_ipv6=true
+{%- endif %}
 
   {{network.name}}Subnet:
     type: OS::Neutron::Subnet
+    deletion_policy: {get_param: NetworkDeletionPolicy}
     condition: manage_networks
 {%- if network.external_resource_subnet_id|default('') %}
     external_id: {{ network.external_resource_subnet_id }}
 {%- endif %}
     properties:
-{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
-      ip_version: 6
-      ipv6_address_mode: {get_param: IPv6AddressMode}
-      ipv6_ra_mode: {get_param: IPv6RAMode}
-{%- else %}
-      enable_dhcp: {get_param: {{network.name}}NetEnableDHCP}
-{%- endif %}
       cidr: {get_param: {{network.name}}NetCidr}
       name: {get_param: {{network.name}}SubnetName}
       network: {get_resource: {{network.name}}Network}
@@ -179,10 +202,24 @@ resources:
       host_routes: {get_param: {{network.name}}Routes}
       # All networks have an implicit network segment when created, map this subnet to that segment.
       segment: {get_attr: [{{network.name}}Network, segments, 0, id]}
+      ip_version: {if: [is_ipv6, 6, 4]}
+{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
+      ipv6_address_mode: {get_param: IPv6AddressMode}
+      ipv6_ra_mode: {get_param: IPv6RAMode}
+{%- else %}
+      enable_dhcp: {get_param: {{network.name}}NetEnableDHCP}
+{%- endif %}
+      tags:
+        - str_replace:
+            template: tripleo_vlan_id=$vlan_id
+            params:
+              $vlan_id: {get_param: {{network.name}}NetworkVlanID}
+
 
 {% for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
   {{network.name}}Segment_{{subnet}}:
     type: OS::Neutron::Segment
+    deletion_policy: {get_param: NetworkDeletionPolicy}
     condition: manage_networks
     # NOTE(hjensas): Depends-On here to ensure we always create the base subnet
     #   first. We can only set the segment for existing subnet if there is only
@@ -200,18 +237,12 @@ resources:
 
   {{network.name}}Subnet_{{subnet}}:
     type: OS::Neutron::Subnet
+    deletion_policy: {get_param: NetworkDeletionPolicy}
     condition: manage_networks
 {%- if network.subnets[subnet].external_resource_subnet_id|default('') %}
     external_id: {{ network.subnets[subnet].external_resource_subnet_id }}
 {%- endif %}
     properties:
-{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
-      ip_version: 6
-      ipv6_address_mode: {get_param: IPv6AddressMode}
-      ipv6_ra_mode: {get_param: IPv6RAMode}
-{%- else %}
-      enable_dhcp: {get_param: {{network.name}}NetEnableDHCP}
-{%- endif %}
       cidr: {get_param: {{network.name}}SubnetCidr_{{subnet}}}
       name: {{subnet}}
       network: {get_resource: {{network.name}}Network}
@@ -219,12 +250,28 @@ resources:
       gateway_ip: {get_param: {{network.name}}InterfaceDefaultRoute_{{subnet}}}
       host_routes: {get_param: {{network.name}}Routes_{{subnet}}}
       segment: {get_resource: {{network.name}}Segment_{{subnet}}}
+      ip_version: {if: [is_ipv6, 6, 4]}
+{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
+      ipv6_address_mode: {get_param: IPv6AddressMode}
+      ipv6_ra_mode: {get_param: IPv6RAMode}
+{%- else %}
+      enable_dhcp: {get_param: {{network.name}}NetEnableDHCP}
+{%- endif %}
+      tags:
+        - str_replace:
+            template: tripleo_vlan_id=$vlan_id
+            params:
+              $vlan_id: {get_param: {{network.name}}NetworkVlanID_{{subnet}}}
+
 {% endfor %}
 
 outputs:
   OS::stack_id:
     description: {{network.name_lower}} network
     value: {get_resource: {{network.name}}Network}
+  ip_version:
+    description: IP version of {{network.name}} network.
+    value: {if: [is_ipv6, 6, 4]}
   network_cidrs:
     description: List of {{network.name}} network's subnets in CIDR notation.
     value:
@@ -249,4 +296,14 @@ outputs:
 {%-     else %}
               - "{{network.subnets[subnet]['ip_subnet']|default("")}}"
 {%-     endif %}
+{%- endfor %}
+  network_attrs:
+    description: {{network.name}} network's attributes
+    value: {get_attr: [{{network.name}}Network, show]}
+  subnet_attrs:
+    description: Map of attributes for subnets in the {{network.name}} network
+    value:
+      {{network.name_lower}}_subnet: {get_attr: [{{network.name}}Subnet, show]}
+{%- for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
+      {{subnet}}: {get_attr: [{{network.name}}Subnet_{{subnet}}, show]}
 {%- endfor %}

@@ -78,10 +78,6 @@ parameters:
     type: string
     constraints:
       - allowed_values: ['dhcpv6-stateless', 'dhcpv6-stateful']
-  KeystoneRegion:
-    type: string
-    default: 'regionOne'
-    description: Keystone region for endpoint
   UndercloudCloudName:
     type: string
     default: 'undercloud'
@@ -91,6 +87,12 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
+  CloudDomain:
+    default: 'localdomain'
+    type: string
+    description: >
+      The DNS domain used for the hosts. This must match the
+      overcloud_domain_name configured on the undercloud.
 
 conditions:
 
@@ -144,41 +146,6 @@ resources:
           - ''
         auth_url: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix]}
 
-  CloudsYamlConfig:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: script
-      inputs:
-        - name: admin_password
-        - name: auth_url
-        - name: cloud_name
-        - name: home_dir
-        - name: identity_api_version
-        - name: project_name
-        - name: project_domain_name
-        - name: region_name
-        - name: user_name
-        - name: user_domain_name
-      config: {get_file: ./clouds_yaml.py}
-
-  CloudsYamlDeployment:
-    type: OS::Heat::SoftwareDeploymentGroup
-    properties:
-      name: CloudsYamlDeployment
-      servers: {get_param: servers}
-      config: {get_resource: CloudsYamlConfig}
-      input_values:
-        admin_password: {get_param: AdminPassword}
-        auth_url: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix]}
-        cloud_name: {get_param: UndercloudCloudName}
-        home_dir: {get_param: UndercloudHomeDir}
-        identity_api_version: 3
-        project_name: 'admin'
-        project_domain_name: 'Default'
-        region_name: {get_param: KeystoneRegion}
-        user_name: 'admin'
-        user_domain_name: 'Default'
-
   UndercloudPostPyConfig:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -189,7 +156,7 @@ resources:
 
   UndercloudPostPyDeployment:
     type: OS::Heat::SoftwareDeploymentGroup
-    depends_on: [UndercloudPostDeployment, CloudsYamlDeployment]
+    depends_on: UndercloudPostDeployment
     properties:
       name: UndercloudPostPyDeployment
       servers: {get_param: servers}
@@ -217,7 +184,7 @@ resources:
 
   UndercloudCtlplaneNetworkDeployment:
     type: OS::Heat::SoftwareDeploymentGroup
-    depends_on: [UndercloudPostDeployment, CloudsYamlDeployment]
+    depends_on: UndercloudPostDeployment
     properties:
       name: UndercloudCtlplaneNetworkDeployment
       servers: {get_param: servers}
@@ -229,6 +196,7 @@ resources:
             params:
               JSON:
                 cloud_name: {get_param: UndercloudCloudName}
+                cloud_domain: {get_param: CloudDomain}
                 local_ip: {get_param: [DeployedServerPortMap, 'control_virtual_ip', fixed_ips, 0, ip_address]}
                 local_subnet: {get_param: UndercloudCtlplaneLocalSubnet}
                 physical_network: {get_param: CtlplaneLocalPhysicalNetwork}
