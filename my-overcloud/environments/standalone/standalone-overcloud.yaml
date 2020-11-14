@@ -42,11 +42,17 @@ parameter_defaults:
   # Type: string
   StandaloneHostnameFormat: '%stackname%-standalone-%index%'
 
+  # Standalone NetworkConfigTemplate
+  # Type: string
+  StandaloneNetworkConfigTemplate: templates/net_config_bridge.j2
+
   # How many replicas to use in the swift rings.
   # Type: number
   SwiftReplicas: 1
 
 resource_registry:
+  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
+  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -95,4 +101,3 @@ resource_registry:
   OS::TripleO::Services::SaharaApi: OS::Heat::None
   OS::TripleO::Services::SaharaEngine: OS::Heat::None
   OS::TripleO::Services::Zaqar: OS::Heat::None
-  OS::TripleO::Standalone::Net::SoftwareConfig: ../../net-config-bridge.yaml

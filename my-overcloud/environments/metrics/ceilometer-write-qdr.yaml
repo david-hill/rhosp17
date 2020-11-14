@@ -9,4 +9,6 @@ resource_registry:
   OS::TripleO::Services::Redis: ../../deployment/database/redis-pacemaker-puppet.yaml
 
 parameter_defaults:
-  CeilometerQdrPublish: true
+  CeilometerQdrPublishEvents: true
+  CeilometerQdrPublisMetrics: true
+  NotificationDriver: 'messagingv2'

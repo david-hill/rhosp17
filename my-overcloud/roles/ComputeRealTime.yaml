@@ -9,6 +9,8 @@
     and NovaComputeCpuSharedSet are set according to the hardware of the
     real-time compute nodes.
   CountDefault: 1
+  tags:
+    - compute
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -25,6 +27,7 @@
     NovaComputeCpuDedicatedSet: ""  # real-time nodes
     NovaComputeCpuSharedSet: ""     #
     NovaLibvirtMemStatsPeriodSeconds: 0
+    NovaComputeDisableIrqBalance: True
   update_serial: 25
   ServicesDefault:
     - OS::TripleO::Services::Aide

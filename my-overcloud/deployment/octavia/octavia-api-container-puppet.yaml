@@ -165,16 +165,16 @@ outputs:
           - {get_attr: [OctaviaWorker, role_data, config_settings]}
           - {get_attr: [OctaviaProviderConfig, role_data, config_settings]}
           - octavia::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri] }
-            octavia::policy::policies: {get_param: OctaviaApiPolicies}
             octavia::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             octavia::keystone::authtoken::project_name: {get_param: OctaviaProjectName}
             octavia::keystone::authtoken::password: {get_param: OctaviaPassword}
             octavia::keystone::authtoken::user_domain_name: 'Default'
             octavia::keystone::authtoken::project_domain_name: 'Default'
             octavia::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            octavia::keystone::authtoken::interface: 'internal'
+            octavia::policy::policies: {get_param: OctaviaApiPolicies}
             octavia::worker::manage_nova_flavor: {get_param: OctaviaManageNovaFlavor}
             octavia::worker::nova_flavor_config: {get_param: OctaviaFlavorProperties}
-            octavia::api::sync_db: true
             octavia::api::service_name: 'httpd'
             octavia::wsgi::apache::ssl: {get_param: EnableInternalTLS}
             # NOTE: bind IP is found in hiera replacing the network name with the local node IP
@@ -269,6 +269,9 @@ outputs:
                 - path: /var/log/octavia
                   owner: octavia:octavia
                   recurse: true
+                - path: /run/octavia
+                  owner: octavia:octavia
+                  recurse: true
               - {get_attr: [OctaviaProviderConfig, role_data, kolla_permissions]}
         /var/lib/kolla/config_files/octavia_driver_agent.json:
           command: /usr/bin/octavia-driver-agent --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/driver-agent.log --config-dir /etc/octavia/conf.d/common
@@ -279,6 +282,9 @@ outputs:
               preserve_properties: true
           permissions:
             - path: /var/log/octavia
+              owner: octavia:octavia
+              recurse: true
+            - path: /run/octavia
               owner: octavia:octavia
               recurse: true
       container_puppet_tasks:
@@ -392,10 +398,17 @@ outputs:
             - { 'path': /run/octavia, 'setype': container_file_t, 'mode': '0755'  }
         - name: ensure /run/octavia is present upon reboot
           copy:
-            dest: /etc/tmpfiles.d/var-run-octavia.conf
+            dest: /etc/tmpfiles.d/run-octavia.conf
             content: |
               d /run/octavia 0755 root root - -
       update_tasks:
+        - name: octavia_api_tmpfile_cleanup
+          when: step|int == 1
+          block: &octavia_api_tmpfile_cleanup
+            - name: octavia_api_tmpfile_cleanup
+              file:
+                path: /etc/tmpfiles.d/var-run-octavia.conf
+                state: absent
         - name: Set internal tls variable
           set_fact:
             internal_tls_enabled: {get_param: EnableInternalTLS}
@@ -431,6 +444,9 @@ outputs:
                   systemd:
                     daemon-reload: yes
       upgrade_tasks:
+        - name: octavia_api_tmpfile_cleanup
+          when: step|int == 1
+          block: *octavia_api_tmpfile_cleanup
         - name: Set internal tls variable
           set_fact:
             internal_tls_enabled: {get_param: EnableInternalTLS}

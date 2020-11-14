@@ -45,7 +45,7 @@ parameters:
     default: ''
     description: FQDN for the FreeIPA server.  If you set this value, IdMDomain
                  also has to be provided.  Typically, this is discovered
-                 through DNS and does not have to set explicitly.
+                 through DNS and does not have to be set explicitly.
     type: string
   IdMNovaKeytab:
     default: 'FILE:/etc/novajoin/krb5.keytab'
@@ -141,6 +141,12 @@ outputs:
               stat:
                 path: /etc/ipa/default.conf
               register: ipa_conf_exists
+            - name: install openssl-perl
+              package:
+                name: openssl-perl
+                state: present
+              when:
+                - ipaclient_install_packages|bool
             - block:
                 - name: register as an ipa client
                   import_role:
@@ -160,8 +166,18 @@ outputs:
             - name: unregister node from ipa server
               import_role:
                 name: tripleo_ipa_cleanup
-              delegate_to: Undercloud
+              delegate_to: undercloud
               vars:
                 tripleo_ipa_keytab: {get_param: IdMNovaKeytab}
                 tripleo_ipa_hosts_to_delete:
                   - "{{ fqdn_canonical }}"
+      external_upgrade_tasks:
+        - when: step|int == 1
+          block:
+            - name: check if ipa server has required permissions
+              import_role:
+                name: tls_everywhere
+                tasks_from: ipa-server-check
+              tags:
+                - opendev-validation
+                - opendev-validation-tls-everywhere

@@ -97,6 +97,12 @@ parameters:
       description: >
         The Ceph cluster name must be at least 1 character and contain only
         letters and numbers.
+  CephMsgrSecureMode:
+    type: boolean
+    default: false
+    description: >
+      Enable Ceph msgr2 secure mode to enable on-wire encryption between Ceph
+      daemons and also between Ceph clients and daemons.
   CephPoolDefaultPgNum:
     description: default pg_num to use for the RBD pools
     type: number
@@ -170,14 +176,6 @@ parameters:
   ManilaCephFSMetadataPoolName:
     default: manila_metadata
     type: string
-  # start DEPRECATED options for compatibility with older versions
-  ManilaCephFSDataPoolPGNum:
-    default: 128
-    type: number
-  ManilaCephFSMetadataPoolPGNum:
-    default: 128
-    type: number
-  # end DEPRECATED options for compatibility with older versions
   ManilaCephFSShareBackendName:
     default: cephfs
     type: string
@@ -328,22 +326,22 @@ parameters:
     type: string
     constraints:
     - allowed_values: ['swift', 'file', 'rbd', 's3']
+  EnableInternalTLS:
+    type: boolean
+    default: false
 
 parameter_groups:
 - label: deprecated
   description: Do not use deprecated params, they will be removed.
   parameters:
-  - ManilaCephFSDataPoolPGNum
-  - ManilaCephFSMetadataPoolPGNum
   - LocalCephAnsibleFetchDirectoryBackup
   - SwiftFetchDirGetTempurl
   - SwiftFetchDirPutTempurl
   - CephIPv6
 
 conditions:
-  deprecated_data_pool_pgnum: {not: {equals: [{get_param: ManilaCephFSDataPoolPGNum}, 128]}}
-  deprecated_metadata_pool_pgnum: {not: {equals: [{get_param: ManilaCephFSMetadataPoolPGNum}, 128]}}
   dashboard_is_enabled: {equals: [{get_param: CephEnableDashboard}, true]}
+  msgr_secure_mode: {equals: [{get_param: CephMsgrSecureMode}, true]}
   custom_registry_host:
     yaql:
       data: {get_param: ContainerCephDaemonImage}
@@ -379,6 +377,7 @@ conditions:
     equals:
       - {get_param: [ServiceData, net_ip_version_map, {get_param: [ServiceNetMap, CephMonNetwork]}]}
       - 6
+  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
 
 resources:
   ContainerImageUrlParts:
@@ -406,6 +405,17 @@ resources:
           yaql:
             expression: $.data.rightSplit(':', 1)[1]
             data: {get_param: ContainerCephDaemonImage}
+
+  MsgrSecureModeOverrides:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        vars:
+          global:
+            ms_cluster_mode: secure
+            ms_service_mode: secure
+            ms_client_mode: secure
 
   DefaultCephConfigOverrides:
     type: OS::Heat::Value
@@ -469,16 +479,8 @@ resources:
         vars:
           data: {get_param: ManilaCephFSDataPoolName}
           metadata: {get_param: ManilaCephFSMetadataPoolName}
-          data_pg_num:
-            if:
-            - deprecated_data_pool_pgnum
-            - {get_param: ManilaCephFSDataPoolPGNum}
-            - {get_param: CephPoolDefaultPgNum}
-          metadata_pg_num:
-            if:
-            - deprecated_metadata_pool_pgnum
-            - {get_param: ManilaCephFSMetadataPoolPGNum}
-            - {get_param: CephPoolDefaultPgNum}
+          data_pg_num: {get_param: CephPoolDefaultPgNum}
+          metadata_pg_num: {get_param: CephPoolDefaultPgNum}
 
   CephKeyVars:
     type: OS::Heat::Value
@@ -560,7 +562,6 @@ outputs:
     value:
       service_name: ceph_base
       upgrade_tasks: []
-      post_upgrade_tasks: []
       puppet_config:
         config_image: ''
         config_volume: ''
@@ -601,7 +602,15 @@ outputs:
                 ceph_pools: {get_attr: [CephBasePoolVars, value, vars]}
                 manila_pools: {get_attr: [CephManilaPoolVars, value, vars]}
                 ceph_keys: {get_attr: [CephKeyVars, value, vars]}
-                ceph_default_overrides: {get_attr: [DefaultCephConfigOverrides, value, vars]}
+                ceph_default_overrides:
+                  if:
+                  - msgr_secure_mode
+                  - yaql:
+                      expression: ($.data.default).mergeWith($.data.secure)
+                      data:
+                        default: {get_attr: [DefaultCephConfigOverrides, value, vars]}
+                        secure: {get_attr: [MsgrSecureModeOverrides, value, vars]}
+                  - {get_attr: [DefaultCephConfigOverrides, value, vars]}
                 ceph_config_overrides: {get_param: CephConfigOverrides}
             - name: set ceph-ansible facts
               set_fact:
@@ -610,6 +619,12 @@ outputs:
                   if:
                   - dashboard_is_enabled
                   - map_merge:
+                    - if:
+                      - internal_tls_enabled
+                      -
+                        dashboard_tls_external: true
+                        dashboard_grafana_api_no_ssl_verify: true
+                      - {}
                     - {get_attr: [CephBaseAnsibleVars, value, vars]}
                     - dashboard_admin_password: {get_param: CephDashboardAdminPassword}
                     - grafana_admin_password: {get_param: CephGrafanaAdminPassword}
@@ -712,3 +727,10 @@ outputs:
             - name: set ceph_ansible_playbooks_default
               set_fact:
                 ceph_ansible_playbooks_default: ["/usr/share/ceph-ansible/infrastructure-playbooks/rolling_update.yml"]
+      post_upgrade_tasks:
+        - name: Clean puppet-ceph package
+          when:
+            - (step | int) == 3
+          package:
+            name: puppet-ceph
+            state: absent

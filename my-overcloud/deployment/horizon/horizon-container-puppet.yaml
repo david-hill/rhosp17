@@ -68,6 +68,10 @@ parameters:
     description: Set CSRF_COOKIE_SECURE / SESSION_COOKIE_SECURE in Horizon
     type: boolean
     default: false
+  HorizonSessionTimeout:
+    description: Set session timeout for horizon in seconds
+    type: number
+    default: 1800
   MemcachedIPv6:
     default: false
     description: Enable IPv6 features in Memcached.
@@ -133,6 +137,11 @@ parameters:
                  of hashes, and the hashes should have two items each (name, display)
                  containing Keystone domain name and a human-readable description of
                  the domain respectively.
+  HorizonLoggingSource:
+    type: json
+    default:
+      tag: openstack.horizon
+      file: /var/log/containers/horizon/horizon.log
 
 parameter_groups:
 - label: deprecated
@@ -205,6 +214,7 @@ outputs:
                   - {get_param: HorizonSecret}
                   - {get_param: [DefaultPasswords, horizon_secret]}
           horizon::secure_cookies: {get_param: [HorizonSecureCookies]}
+          horizon::session_timeout: {get_param: HorizonSessionTimeout}
           memcached_ipv6: {if: [is_ipv6, true, false]}
           horizon::servername:
             str_replace:
@@ -213,11 +223,16 @@ outputs:
               params:
                 $NETWORK: {get_param: [ServiceNetMap, HorizonNetwork]}
           horizon::listen_ssl: {get_param: EnableInternalTLS}
-          horizon::horizon_ca: {get_param: InternalTLSCAFile}
           horizon::customization_module: {get_param: HorizonCustomizationModule}
           horizon::timezone: {get_param: TimeZone}
           horizon::file_upload_temp_dir: '/var/tmp'
           horizon::help_url: {get_param: HorizonHelpURL}
+        -
+          if:
+          - internal_tls_enabled
+          - horizon::horizon_ca: {get_param: InternalTLSCAFile}
+            horizon::ssl_verify_client: true
+          - {}
         -
           if:
           - websso_enabled
@@ -246,6 +261,14 @@ outputs:
           - {}
       ansible_group_vars:
         keystone_enable_member: true
+      service_config_settings:
+        rsyslog:
+          tripleo_logging_sources_horizon:
+            yaql:
+              expression: $.data.sources.flatten()
+              data:
+                sources:
+                  - {get_param: HorizonLoggingSource}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: horizon

@@ -19,15 +19,13 @@ resource_registry:
   OS::TripleO::Services::HeatApiCloudwatch: ../../deployment/heat/heat-api-cloudwatch-disabled-puppet.yaml
   OS::TripleO::Services::HeatEngine: ../../deployment/heat/heat-engine-container-puppet.yaml
   OS::TripleO::Services::MetricsQdr: ../../deployment/metrics/qdr-container-puppet.yaml
+  OS::TripleO::Services::Multipathd: ../../deployment/multipathd/multipathd-container-ansible.yaml
   OS::TripleO::Services::OsloMessagingRpc: ../../deployment/rabbitmq/rabbitmq-messaging-rpc-pacemaker-puppet.yaml
   OS::TripleO::Services::OsloMessagingNotify: ../../deployment/rabbitmq/rabbitmq-messaging-notify-shared-puppet.yaml
   OS::TripleO::Services::Rear: ../../deployment/backup-and-restore/rear-baremetal-ansible.yaml
   OS::TripleO::Services::Redis: ../../deployment/database/redis-pacemaker-puppet.yaml
   OS::TripleO::Services::CinderBackup: ../../deployment/cinder/cinder-backup-pacemaker-puppet.yaml
   OS::TripleO::Services::CinderVolume: ../../deployment/cinder/cinder-volume-pacemaker-puppet.yaml
-  # Some infra instances don't pass the ping test but are otherwise working.
-  # Since the OVB jobs also test this functionality we can shut it off here.
-  OS::TripleO::AllNodes::Validation: ../common/all-nodes-validation-disabled.yaml
   OS::TripleO::Services::SwiftProxy: OS::Heat::None
   OS::TripleO::Services::SwiftStorage: OS::Heat::None
   OS::TripleO::Services::SwiftRingBuilder: OS::Heat::None
@@ -45,16 +43,18 @@ parameter_defaults:
     # in sync with the archive policy, 60s too.
     ceilometer::agent::polling::polling_interval: 15
     tripleo::profile::base::metrics::qdr::interior_mesh_nodes: ''
+  NotificationDriver: 'messagingv2'
   ManagePolling: true
   HeatConfigureDelegatedRoles: true
-  ManagePipeline: true
   CeilometerEnableGnocchi: true
   PipelinePublishers:
     - gnocchi://?archive_policy=ceilometer-high-rate
   EventPipelinePublishers:
     - gnocchi://?archive_policy=ceilometer-high-rate
   CeilometerQdrPublishEvents: true
+  CeilometerQdrPublishMetrics: true
   ManageEventPipeline: true
+  ManagePipeline: true
 
   Debug: true
   CephAnsibleDisksConfig:
@@ -156,9 +156,8 @@ parameter_defaults:
   CollectdConnectionType: amqp1
   CollectdAmqpInterval: 5
   CollectdDefaultPollingInterval: 5
-  CollectdExtraPlugins:
-    - rrdtool
   CollectdEnableSensubility: true
+  CollectdEnableLibpodstats: true
   CollectdAmqpInstances:
     notify:
       notify: true
@@ -187,3 +186,11 @@ parameter_defaults:
       osdkey: osdvalue
     foo: bar
   NfsUrl: 127.0.0.1
+  CephMsgrSecureMode: true
+  LVMFilterEnabled: true
+  LVMFilterAllowlist:
+    - /dev/loop2
+    - /dev/loop3
+    - /dev/loop4
+  MultipathdEnable: true
+  NovaLibvirtVolumeUseMultipath: true

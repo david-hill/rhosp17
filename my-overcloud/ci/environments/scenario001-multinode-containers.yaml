@@ -1,6 +1,4 @@
 resource_registry:
-  OS::TripleO::Controller::Net::SoftwareConfig: ../common/net-config-multinode.yaml
-  OS::TripleO::Compute::Net::SoftwareConfig: ../common/net-config-multinode.yaml
   OS::TripleO::Services::CephMgr: ../../deployment/ceph-ansible/ceph-mgr.yaml
   OS::TripleO::Services::CephMon: ../../deployment/ceph-ansible/ceph-mon.yaml
   OS::TripleO::Services::CephOSD: ../../deployment/ceph-ansible/ceph-osd.yaml
@@ -28,11 +26,10 @@ resource_registry:
   OS::TripleO::Services::HeatApiCfn: ../../deployment/heat/heat-api-cfn-container-puppet.yaml
   OS::TripleO::Services::HeatApiCloudwatch: ../../deployment/heat/heat-api-cloudwatch-disabled-puppet.yaml
   OS::TripleO::Services::HeatEngine: ../../deployment/heat/heat-engine-container-puppet.yaml
-  # Some infra instances don't pass the ping test but are otherwise working.
-  # Since the OVB jobs also test this functionality we can shut it off here.
-  OS::TripleO::AllNodes::Validation: ../common/all-nodes-validation-disabled.yaml
 
 parameter_defaults:
+  ControllerNetworkConfigTemplate: 'templates/ci/multinode.j2'
+  ComputeNetworkConfigTemplate: 'templates/ci/multinode.j2'
   ControllerServices:
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::Clustercheck
@@ -100,7 +97,7 @@ parameter_defaults:
 
   ControllerExtraConfig:
     nova::compute::libvirt::services::libvirt_virt_type: qemu
-    nova::compute::libvirt::libvirt_virt_type: qemu
+    nova::compute::libvirt::virt_type: qemu
     # NOTE(sileht): To decrease the time test_telemetry_integration takes We
     # configure Ceilometer to poll more, We configure the
     # 'ceilometer-high-rate' Gnocchi archive policy to keep 1 point every 60s.
@@ -110,6 +107,7 @@ parameter_defaults:
     ceilometer::agent::polling::polling_interval: 15
     # NOTE(mmagr): uncomment when QDR mesh will actually work (followup on review.opendev.org/702754)
     #tripleo::profile::base::metrics::qdr::router_mode: interior
+  NotificationDriver: 'messagingv2'
   ManagePolling: true
   ManagePipeline: true
   CeilometerEnableGnocchi: true
@@ -176,6 +174,7 @@ parameter_defaults:
   CollectdExtraPlugins:
     - rrdtool
   CollectdEnableSensubility: true
+  CollectdEnableLibpodstats: true
   LoggingServers:
     - host: 127.0.0.1
       port: 24224

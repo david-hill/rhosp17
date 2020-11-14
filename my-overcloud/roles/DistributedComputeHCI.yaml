@@ -4,6 +4,8 @@
 - name: DistributedComputeHCI
   description: |
     Distributed Compute Node role with Ceph, Cinder volume, and Glance.
+  tags:
+    - compute
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -21,6 +23,7 @@
     - OS::TripleO::Services::Aide
     - OS::TripleO::Services::AuditD
     - OS::TripleO::Services::BarbicanClient
+    - OS::TripleO::Services::BlockStorageCinderVolume
     - OS::TripleO::Services::BootParams
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::CephClient
@@ -32,7 +35,6 @@
     - OS::TripleO::Services::CephRgw
     - OS::TripleO::Services::CephOSD
     - OS::TripleO::Services::CertmongerUser
-    - OS::TripleO::Services::BlockStorageCinderVolume
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::ComputeCeilometerAgent
     - OS::TripleO::Services::ComputeNeutronCorePlugin

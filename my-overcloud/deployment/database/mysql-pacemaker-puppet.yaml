@@ -18,6 +18,12 @@ parameters:
                  set to true, the service uses a floating prefix as
                  well, e.g. 'cluster.common.tag/IMAGENAME:pcmklatest'.
     type: boolean
+  ClusterFullTag:
+    default: false
+    description: When set to true, the pacemaker service uses a fully
+                 constant tag for its container image name, e.g.
+                 'cluster.common.tag/SERVICENAME:pcmklatest'.
+    type: boolean
   EndpointMap:
     default: {}
     description: Mapping of service endpoint -> protocol. Typically set
@@ -102,6 +108,7 @@ conditions:
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
   common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
+  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
 
 outputs:
   role_data:
@@ -142,15 +149,18 @@ outputs:
             tripleo::profile::pacemaker::database::mysql::ca_file:
               get_param: InternalTLSCAFile
             tripleo::profile::pacemaker::database::mysql_bundle::mysql_docker_image: &mysql_image_pcmklatest
-              yaql:
-                data:
-                  if:
-                    - common_tag_enabled
-                    - yaql:
-                        data: {get_param: ContainerMysqlImage}
-                        expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
-                    - {get_param: ContainerMysqlImage}
-                expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
+              if:
+                - common_tag_full
+                - "cluster.common.tag/mariadb:pcmklatest"
+                - yaql:
+                    data:
+                      if:
+                        - common_tag_enabled
+                        - yaql:
+                            data: {get_param: ContainerMysqlImage}
+                            expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
+                        - {get_param: ContainerMysqlImage}
+                    expression: concat($.data.rightSplit(separator => ":", maxSplits => 1)[0], ":pcmklatest")
             tripleo::profile::pacemaker::database::mysql_bundle::control_port: 3123
             tripleo::profile::pacemaker::database::mysql_bundle::container_backend: {get_param: ContainerCli}
             tripleo::profile::pacemaker::database::mysql_bundle::bind_address:
@@ -238,6 +248,7 @@ outputs:
                     - 'echo -e "\n[mysqld]\nwsrep_provider=none" >> /etc/my.cnf'
                     - 'kolla_set_configs'
                     - 'sudo -u mysql -E kolla_extend_start'
+                    - 'timeout ${DB_MAX_TIMEOUT} /bin/bash -c ''while pgrep -af /usr/bin/mysqld_safe | grep -q -v grep; do sleep 1; done'''
                     - 'mysqld_safe --skip-networking --wsrep-on=OFF &'
                     - 'timeout ${DB_MAX_TIMEOUT} /bin/bash -c ''until mysqladmin -uroot -p"${DB_ROOT_PASSWORD}" ping 2>/dev/null; do sleep 1; done'''
                     - 'mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "CREATE USER ''clustercheck''@''localhost'' IDENTIFIED BY ''${DB_CLUSTERCHECK_PASSWORD}'';"'
@@ -264,7 +275,7 @@ outputs:
                       - {get_param: MysqlRootPassword}
                       - {get_param: [DefaultPasswords, mysql_root_password]}
         step_2:
-          mysql_init_bundle:
+          mysql_wait_bundle:
             start_order: 0
             detach: false
             net: host
@@ -274,8 +285,8 @@ outputs:
               list_concat:
                 - - '/container_puppet_apply.sh'
                   - '2'
-                  - 'file,file_line,concat,augeas,pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation,galera_ready,mysql_database,mysql_grant,mysql_user'
-                  - 'include tripleo::profile::base::pacemaker;include tripleo::profile::pacemaker::database::mysql_bundle'
+                  - 'file,file_line,concat,augeas,galera_ready,mysql_database,mysql_grant,mysql_user'
+                  - 'include tripleo::profile::pacemaker::database::mysql_bundle'
                 - if:
                   - puppet_debug_enabled
                   - - '--debug'
@@ -294,21 +305,6 @@ outputs:
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
-          mysql_restart_bundle:
-            start_order: 1
-            config_volume: mysql
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            environment:
-              TRIPLEO_MINOR_UPDATE: ''
-            command: /var/lib/container-config-scripts/pacemaker_restart_bundle.sh mysql galera galera-bundle Master
-            image: {get_param: ContainerMysqlImage}
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, pacemaker_restart_volumes]}
-                - - /var/lib/config-data/puppet-generated/mysql:/var/lib/kolla/config_files/src:ro
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -330,6 +326,21 @@ outputs:
           vars:
             container_image: {get_param: ContainerMysqlImage}
             container_image_latest: *mysql_image_pcmklatest
+        - name: MySQL HA Wrappers Step
+          when: step|int == 2
+          block: &mysql_puppet_bundle
+            - name: Mysql puppet bundle
+              import_role:
+                name: tripleo_ha_wrapper
+              vars:
+                tripleo_ha_wrapper_service_name: mysql
+                tripleo_ha_wrapper_resource_name: galera
+                tripleo_ha_wrapper_bundle_name: galera-bundle
+                tripleo_ha_wrapper_resource_state: Master
+                tripleo_ha_wrapper_puppet_config_volume: mysql
+                tripleo_ha_wrapper_puppet_execute: '["Mysql_datadir", "Mysql_user", "Mysql_database", "Mysql_grant", "Mysql_plugin"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::database::mysql_bundle'
+                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
 
       update_tasks:
         - name: Tear-down non-HA mysql container
@@ -372,6 +383,10 @@ outputs:
                 galera_image_latest: *mysql_image_pcmklatest
             - name: Pull latest galera images
               command: "{{container_cli}} pull {{galera_image}}"
+              register: result
+              retries: 3
+              delay: 3
+              until: result.rc == 0
             - name: Get previous galera image id
               shell: "{{container_cli}} inspect --format '{{'{{'}}.Id{{'}}'}}' {{galera_image_latest}}"
               register: old_galera_image_id
@@ -387,6 +402,13 @@ outputs:
                 container_image_latest: "{{galera_image_latest}}"
               when:
                 - old_galera_image_id.stdout != new_galera_image_id.stdout
+
+      post_update_tasks:
+        - name: Mysql bundle post update
+          when: step|int == 1
+          block: *mysql_puppet_bundle
+          vars:
+            tripleo_ha_wrapper_minor_update: true
 
       upgrade_tasks:
         - name: Tear-down non-HA mysql container
@@ -539,7 +561,7 @@ outputs:
                 name: tripleo_container_rm
               vars:
                 tripleo_containers_to_rm:
-                  - mysql_init_bundle
+                  - mysql_wait_bundle
               when:
                 - mysql_short_node_names_upgraded | length > 1
             - name: add the mysql short name to hiera data for the upgrade.

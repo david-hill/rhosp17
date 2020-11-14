@@ -142,6 +142,10 @@ parameters:
       set to UPGRADE when a major-version upgrade is in progress.
     constraints:
     - allowed_values: ['CREATE', 'UPDATE']
+  NetworkSafeDefaults:
+    default: true
+    description: Allow to enable/disable safe networking defaults if os-net-config would fail to run with the provided config.
+    type: boolean
   DeployArtifactURLs:
     default: []
     description: A list of HTTP URLs containing deployment artifacts.
@@ -363,7 +367,8 @@ outputs:
         validate_fqdn: {get_param: ValidateFqdn}
         ping_test_ips: {get_param: PingTestIpsMap}
         stack_action: {get_param: StackAction}
-        deploy_artifact_urls: {list_join: [' ', {get_param: DeployArtifactURLs}]}
+        network_safe_defaults: {get_param: NetworkSafeDefaults}
+        deploy_artifact_urls: {get_param: DeployArtifactURLs}
         hosts_entry: {get_param: HostsEntry}
         primary_role_name: {{ primary_role_name }}
         deploy_identifier: {get_param: DeployIdentifier}
@@ -411,8 +416,6 @@ outputs:
       deploy_steps_tasks_step_0: {get_file: deploy-steps-tasks-step-0.yaml}
       common_deploy_steps_tasks_step_1: {get_file: deploy-steps-tasks-step-1.yaml}
       container_puppet_script: {get_file: ./container-puppet.sh}
-      all_nodes_validation_script.sh : {get_file: ../validation-scripts/all-nodes.sh}
-      deploy-artifacts.sh : {get_file: ../puppet/deploy-artifacts.sh}
       generate-config-tasks: {get_file: generate-config-tasks.yaml}
       host-container-puppet-tasks: {get_file: host-container-puppet-tasks.yaml}
       deploy_steps_playbook:
@@ -525,18 +528,8 @@ outputs:
               gather_facts: "{% raw %}{{ gather_facts | default(false) }}{% endraw %}"
               any_errors_fatal: yes
               tasks:
-                - import_tasks: hiera_steps_tasks.yaml
-              tags:
-                - overcloud
-                - pre_deploy_steps
-
-            - hosts: {{primary_role_name}}:DEPLOY_TARGET_HOST
-              strategy: tripleo_free
-              name: Server deployments
-              gather_facts: "{% raw %}{{ gather_facts | default(false) }}{% endraw %}"
-              any_errors_fatal: yes
-              tasks:
 {% raw %}
+                - import_tasks: hiera_steps_tasks.yaml
                 - name: Server deployments
                   delegate_to: localhost
                   run_once: true
@@ -546,49 +539,55 @@ outputs:
                   vars:
                     force: false
                   with_items: "{{ hostvars[inventory_hostname]['pre_deployments_' ~ tripleo_role_name]|default([]) }}"
+{% endraw %}
+              tags:
+                - overcloud
+                - pre_deploy_steps
 
+            - hosts: {{primary_role_name}}:DEPLOY_TARGET_HOST
+              strategy: tripleo_free
+              name: Server network deployments
+              gather_facts: "{% raw %}{{ gather_facts | default(false) }}{% endraw %}"
+              any_errors_fatal: yes
+              tasks:
+{% raw %}
+                - name: Network Configuration
+                  delegate_to: localhost
+                  run_once: true
+                  debug:
+                    msg: Use --start-at-task 'Network Configuration' to resume from this task
                 - name: Check NetworkConfig script existence
-                  local_action:
-                    module: stat
-                    path: "{{ lookup('first_found', NetworkConfig_paths, errors='ignore') }}"
-                  become: no
+                  delegate_to: localhost
+                  stat:
+                    path: "{{ tripleo_role_name ~ '/NetworkConfig' }}"
                   register: NetworkConfig_stat
-                  vars:
-                      NetworkConfig_paths:
-                        - "{{ tripleo_role_name ~ '/' ~ inventory_hostname ~ '/NetworkConfig' }}"
-                        - "{{ tripleo_role_name ~ '/NetworkConfig' }}"
-
+                  when: not tripleo_network_config_with_ansible
                 - name: Run Network Config
                   import_role:
                     name: tripleo_network_config
                   vars:
                     tripleo_network_config_script_path: "{{ NetworkConfig_stat.stat.path }}"
-                    tripleo_network_config_bridge_name: "{{ neutron_physical_bridge_name }}"
-                    tripleo_network_config_interface_name: "{{ neutron_public_interface_name }}"
                     tripleo_network_config_action: "{{ stack_action }}"
                     tripleo_network_config_network_deployment_actions: "{{ network_deployment_actions }}"
                     tripleo_network_config_async_timeout: "{{ async_timeout | default(300) }}"
                     tripleo_network_config_async_poll: "{{ async_poll | default(3) }}"
+                    tripleo_network_config_hide_sensitive_logs: false
+                    tripleo_network_config_legacy_script: false
+                    tripleo_network_config_safe_defaults: "{{ network_safe_defaults }}|bool"
                   when:
-                    - NetworkConfig_stat.stat.exists
-
-                - name: AllNodesValidationConfig
-                  script: all_nodes_validation_script.sh
-                  environment:
-                    validate_controllers_icmp: "{{ validate_controllers_icmp }}"
-                    validate_gateways_icmp: "{{ validate_gateways_icmp }}"
-                    validate_fqdn: "{{ validate_fqdn }}"
-                    ping_test_ips: "{{ ping_test_ips | to_json }}"
-                    tripleo_role_name: "{{ tripleo_role_name }}"
-
-                - name: ArtifactsConfig
-                  script: deploy-artifacts.sh
-                  environment:
-                    artifact_urls: "{{ deploy_artifact_urls }}"
-
+                    - tripleo_network_config_with_ansible or NetworkConfig_stat.stat.exists
+                - name: Basic Network Validation
+                  include_role:
+                    name: tripleo_nodes_validation
+                  vars:
+                    tripleo_nodes_validation_validate_controllers_icmp: "{{ validate_controllers_icmp }}"
+                    tripleo_nodes_validation_validate_gateway_icmp: "{{ validate_gateways_icmp }}"
+                    tripleo_nodes_validation_validate_fqdn: "{{ validate_fqdn }}"
+                    tripleo_nodes_validation_ping_test_ips: "{{ ping_test_ips.get(tripleo_role_name).split(' ') | list | unique }}"
               tags:
                 - overcloud
                 - pre_deploy_steps
+                - network_deploy_steps
 {% endraw %}
 
             - hosts: {{primary_role_name}}:DEPLOY_TARGET_HOST
@@ -609,6 +608,13 @@ outputs:
                 docker_puppet_process_count: DOCKER_PUPPET_PROCESS_COUNT
                 docker_puppet_mount_host_puppet: DOCKER_PUPPET_MOUNT_HOST_PUPPET
               tasks:
+{% raw %}
+                - name: Deploy Artifacts
+                  tripleo_deploy_artifacts:
+                    artifact_urls: "{{ deploy_artifact_urls }}"
+                  when:
+                    - deploy_artifact_urls|default([])|length > 0
+{% endraw %}
 {%- for role in roles %}
                 - name: {{role.name}} Host prep block
                   when:

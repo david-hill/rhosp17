@@ -5,6 +5,9 @@
   description: |
     Compute OvS DPDK RealTime Role
   CountDefault: 1
+  tags:
+    - compute
+    - dpdk
   networks:
     InternalApi:
       subnet: internal_api_subnet
@@ -19,6 +22,7 @@
     NovaLibvirtRxQueueSize: 1024
     NovaLibvirtTxQueueSize: 1024
     NovaLibvirtMemStatsPeriodSeconds: 0
+    NovaComputeDisableIrqBalance: True
   update_serial: 25
   ServicesDefault:
     - OS::TripleO::Services::Aide

@@ -97,6 +97,10 @@ parameters:
       e.g. { nova-context_is_admin: { key: context_is_admin, value: 'role:admin' } }
     default: {}
     type: json
+  NovaAllowResizeToSameHost:
+    default: false
+    description: Allow destination machine to match source for resize.
+    type: boolean
 
 parameter_groups:
 - label: deprecated
@@ -189,9 +193,9 @@ outputs:
             nova::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             nova::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             nova::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            nova::keystone::authtoken::interface: 'internal'
             nova::api::enabled: true
             nova::api::default_floating_pool: {get_param: NovaDefaultFloatingPool}
-            nova::api::sync_db_api: true
             nova::api::enable_proxy_headers_parsing: true
             nova::api::api_bind_address:
               str_replace:
@@ -222,6 +226,7 @@ outputs:
             nova_enable_db_purge: {get_param: NovaEnableDBPurge}
             nova_enable_db_archive: {get_param: NovaEnableDBArchive}
             nova::policy::policies: {get_param: NovaApiPolicies}
+            nova::api::allow_resize_to_same_host: {get_param: NovaAllowResizeToSameHost}
           -
             if:
             - nova_workers_zero

@@ -53,7 +53,7 @@ parameters:
         configuration remnants after upgrades.
   NotificationDriver:
     type: string
-    default: 'messagingv2'
+    default: 'noop'
     description: Driver or drivers to handle sending notifications.
   OctaviaUserName:
     description: The username for the Octavia database and keystone accounts.
@@ -191,7 +191,7 @@ parameters:
                  to receive tenant traffic flow log messages.
     type: comma_delimited_list
   OctaviaTenantLogFacility:
-    default: 1
+    default: 0
     description: The syslog "LOG_LOCAL" facility to use for the tenant
                  traffic flow log messages.
     type: number

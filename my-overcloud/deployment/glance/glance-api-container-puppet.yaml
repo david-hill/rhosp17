@@ -154,6 +154,12 @@ parameters:
       List of enabled Image Import Plugins. Valid values in the list are
       'image_conversion', 'inject_metadata', 'no_op'.
     type: comma_delimited_list
+  GlanceDiskFormats:
+    default: ''
+    description: >
+      List of allowed disk formats in Glance; all formats are allowed when
+      left unset.
+    type: comma_delimited_list
   GlanceImageConversionOutputFormat:
     default: 'raw'
     description: Desired output format for image conversion plugin.
@@ -187,6 +193,11 @@ parameters:
     description: >
       NFS mount options for NFS image import staging
     type: string
+  GlanceSparseUploadEnabled:
+    default: false
+    description: >
+      When using GlanceBackend 'file' and 'rbd' to enable or not sparse upload.
+    type: boolean
   KeystoneRegion:
     type: string
     default: 'regionOne'
@@ -199,7 +210,7 @@ parameters:
     type: json
   NotificationDriver:
     type: string
-    default: 'messagingv2'
+    default: 'noop'
     description: Driver or drivers to handle sending notifications.
   EnableInternalTLS:
     type: boolean
@@ -283,6 +294,7 @@ parameters:
 conditions:
 
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  glance_sparse_upload_enabled: {equals : [{get_param: GlanceSparseUploadEnabled}, true]}
   cinder_backend_enabled:
     or:
     - equals:
@@ -310,10 +322,13 @@ conditions:
           data: {get_param: GlanceMultistoreConfig}
       - true
   force_image_conversion_plugin:
-    and:
-      - rbd_backend_enabled
-      - equals: [{get_param: GlanceImageImportPlugins}, ['no_op']]
-      - equals: [{get_param: NovaEnableRbdBackend}, true]
+    or:
+      - and:
+        - rbd_backend_enabled
+        - equals: [{get_param: GlanceImageImportPlugins}, ['no_op']]
+        - equals: [{get_param: NovaEnableRbdBackend}, true]
+      - glance_sparse_upload_enabled
+
   use_tls_proxy: {equals : [{get_param: EnableInternalTLS}, true]}
   glance_workers_unset: {equals : [{get_param: GlanceWorkers}, '']}
   service_debug_unset: {equals : [{get_param: GlanceDebug}, '']}
@@ -416,6 +431,7 @@ outputs:
             glance::api::authtoken::region_name: {get_param: KeystoneRegion}
             glance::api::authtoken::user_domain_name: 'Default'
             glance::api::authtoken::project_domain_name: 'Default'
+            glance::api::authtoken::interface: 'internal'
             glance::api::pipeline:
               if:
               - glance_cache_enabled
@@ -470,6 +486,8 @@ outputs:
                     $NETWORK: {get_param: [ServiceNetMap, GlanceApiNetwork]}
             glance_notifier_strategy: {get_param: GlanceNotifierStrategy}
             glance_log_file: {get_param: GlanceLogFile}
+            glance::backend::rbd::rbd_thin_provisioning: {get_param: GlanceSparseUploadEnabled}
+            glance::backend::file::filesystem_thin_provisioning: {get_param: GlanceSparseUploadEnabled}
             glance::backend::swift::swift_store_auth_address: {get_param: [EndpointMap, KeystoneV3Internal, uri] }
             glance::backend::swift::swift_store_user: service:glance
             glance::backend::swift::swift_store_key: {get_param: GlancePassword}
@@ -516,7 +534,11 @@ outputs:
               glance::api::filesystem_store_metadata_file: '/etc/glance/glance-metadata-file.json'
               glance::api::filesystem_store_file_perm: '0644'
             - {}
-          - glance::api::sync_db: false
+          -
+            if:
+            - {equals: [{get_param: GlanceDiskFormats}, []]}
+            - {}
+            - glance::api::disk_formats: {get_param: GlanceDiskFormats}
       service_config_settings:
         mysql:
           glance::db::mysql::password: {get_param: GlancePassword}

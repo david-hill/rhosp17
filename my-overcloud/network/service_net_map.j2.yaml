@@ -73,7 +73,7 @@ parameters:
       MysqlNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       SnmpdNetwork: ctlplane
       CephClusterNetwork: {{ _service_nets.get('storage_mgmt', 'ctlplane') }}
-      CephDashboardNetwork: ctlplane
+      CephDashboardNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       CephGrafanaNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       CephMonNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
       CephRgwNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
@@ -90,24 +90,26 @@ parameters:
       EtcdNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       # HaproxyNetwork currently only controls the haproxy.stats network binding
       HaproxyNetwork: ctlplane
-      # We special-case the default ResolveNetwork for the Ceph roles
+      # We special-case the default ResolveNetwork and MetricsQdrNetwork for the Ceph roles
       # for backwards compatibility, all other roles default to internal_api
-{%- for role in roles if role.name.startswith('Ceph') %}
+{%- for role in roles %}
+  {%- if 'ceph' in role.tags|default([]) %}
+    {%- if 'Storage' in role.networks %}
       {{role.name}}HostnameResolveNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
-{%- endfor %}
-{%- for role in roles if not role.name.startswith('Ceph') %}
-    {%- if 'InternalApi' in role.networks %}
-      {{role.name}}HostnameResolveNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
+      {{role.name}}MetricsQdrNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
     {%- else %}
       {{role.name}}HostnameResolveNetwork: ctlplane
+      {{role.name}}MetricsQdrNetwork: ctlplane
     {%- endif %}
-{%- endfor %}
-      # special-case for MetricsQdrNetwork, which will vary depending on role
-{%- for role in roles if role.name == 'CephStorage' or role.name == 'BlockStorage' or role.name == 'ObjectStorage' %}
-      {{role.name}}MetricsQdrNetwork: {{ _service_nets.get('storage', 'ctlplane') }}
-{%- endfor %}
-{%- for role in roles if role.name != 'CephStorage' and role.name != 'BlockStorage' and role.name != 'ObjectStorage' %}
+  {%- else %}
+    {%- if 'InternalApi' in role.networks %}
+      {{role.name}}HostnameResolveNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
       {{role.name}}MetricsQdrNetwork: {{ _service_nets.get('internal_api', 'ctlplane') }}
+    {%- else %}
+      {{role.name}}HostnameResolveNetwork: ctlplane
+      {{role.name}}MetricsQdrNetwork: ctlplane
+    {%- endif %}
+  {%- endif %}
 {%- endfor %}
 
     description: Mapping of service_name -> network name. Typically set
@@ -131,6 +133,7 @@ parameters:
 {%- for network in networks if network.vip|default(false) %}
       {{network.name}}: {{network.name_lower}}_subnet
 {%- endfor %}
+      # FIXME(hjensas): This will return the same value no matter what ...
       redis: {{ _service_nets.get('internal_api', 'internal_api') }}_subnet
       ovn_dbs: {{ _service_nets.get('internal_api', 'internal_api') }}_subnet
     type: json

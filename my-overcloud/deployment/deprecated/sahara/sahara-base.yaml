@@ -55,7 +55,7 @@ parameters:
     type: comma_delimited_list
   NotificationDriver:
     type: string
-    default: 'messagingv2'
+    default: 'noop'
     description: Driver or drivers to handle sending notifications.
   NtpServer:
     default: ['0.pool.ntp.org', '1.pool.ntp.org', '2.pool.ntp.org', '3.pool.ntp.org']
@@ -117,3 +117,4 @@ outputs:
         sahara::keystone::authtoken::user_domain_name: 'Default'
         sahara::keystone::authtoken::project_domain_name: 'Default'
         sahara::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+        sahara::keystone::authtoken::interface: 'internal'

@@ -59,12 +59,16 @@ parameters:
         letters and numbers.
   NovaComputeOptVolumes:
     default: []
-    description: list of optional vo
+    description: list of optional volumes to be mounted
     type: comma_delimited_list
+    tags:
+      - role_specific
   NovaComputeOptEnvVars:
     default: {}
-    description: hash of optional en
+    description: hash of optional environment variables
     type: json
+    tags:
+      - role_specific
   EnableInstanceHA:
     default: false
     description: Whether to enable an Instance Ha configurarion or not.
@@ -382,6 +386,14 @@ parameters:
     default: 0.0
     tags:
       - role_specific
+  NovaEnableVTPM:
+    type: boolean
+    description: >
+      Whether to enable support for enumlated Trusted Platform Module (TPM)
+      devices.
+    default: false
+    tags:
+      - role_specific
   NovaMaxDiskDevicesToAttach:
     type: number
     description: >
@@ -423,6 +435,78 @@ parameters:
     default: ""
     tags:
       - role_specific
+  NovaImageCacheTTL:
+    type: number
+    description: >
+      Time in seconds that nova compute should continue caching an image once
+      it is no longer used by any instances on the host
+    default: 86400
+    tags:
+      - role_specific
+  NovaVGPUTypesDeviceAddressesMapping:
+    type: json
+    description: >
+      Map of vgpu type(s) the instances can get as key and list of corresponding
+      device addresses as value.
+      Ex. NovaVGPUTypesDeviceAddressesMapping: {'nvidia-35': ['0000:84:00.0', '0000:85:00.0'],
+                                        'nvidia-36': ['0000:86:00.0']}
+      where `nvidia-35` and `nvidia-36` are
+      vgpu types and corresponding values are list of associated device addresses.
+    default: {}
+    tags:
+      - role_specific
+  NovaComputeDisableIrqBalance:
+    default: false
+    description: Whether to disable irqbalance on compute nodes or not. Especially
+                 in Realtime Compute role one wants to keep it disabled.
+    type: boolean
+    tags:
+      - role_specific
+  NovaLibvirtCPUMode:
+    type: string
+    description: >
+      The libvirt CPU mode to configure. Defaults to 'host-model' if virt_type is
+      set to kvm, otherwise defaults to 'none'
+    default: 'none'
+    constraints:
+      - allowed_values:
+        - custom
+        - host-model
+        - none
+        - host-passthrough
+    tags:
+      - role_specific
+  NovaLibvirtCPUModels:
+    type: comma_delimited_list
+    description: >
+      The named libvirt CPU model (see names listed in /usr/share/libvirt/cpu_map.xml).
+      Only has effect if cpu_mode="custom" and virt_type="kvm|qemu"
+    default: []
+    tags:
+      - role_specific
+  NovaLibvirtCPUModelExtraFlags:
+    type: string
+    description: >
+      This allows specifying granular CPU feature flags when specifying CPU models.
+      Only has effect if cpu_mode is not set to 'none'.
+    default: ''
+    tags:
+      - role_specific
+  NovaDisableImageDownloadToRbd:
+    type: boolean
+    description: >
+      Refuse to boot an instance if it would require downloading from glance and
+      uploading to ceph instead of a COW clone.
+    default: false
+    tags:
+      - role_specific
+  NovaStatedirOwnershipSkip:
+    type: comma_delimited_list
+    description: >
+      List of paths relative to nova_statedir to ignore when recursively setting the
+      ownership and selinux context.
+    default:
+      - 'triliovault-mounts'
 
   # DEPRECATED: the following options are deprecated and are currently maintained
   # for backwards compatibility. They will be removed in future release.
@@ -504,7 +588,7 @@ resources:
               nova::compute::libvirt::tx_queue_size: NovaLibvirtTxQueueSize
               nova::compute::libvirt::file_backed_memory: NovaLibvirtFileBackedMemory
               nova::compute::libvirt::volume_use_multipath: NovaLibvirtVolumeUseMultipath
-              nova::compute::libvirt::libvirt_hw_machine_type: NovaHWMachineType
+              nova::compute::libvirt::hw_machine_type: NovaHWMachineType
               compute_enable_ksm: NovaComputeEnableKsm
               nova::compute::rbd::libvirt_images_rbd_pool: NovaRbdPoolName
               tripleo::profile::base::nova::compute::nova_nfs_enabled: NovaNfsEnabled
@@ -522,6 +606,16 @@ resources:
               nova::compute::max_disk_devices_to_attach: NovaMaxDiskDevicesToAttach
               nova::compute::libvirt::pmem_namespaces: NovaPMEMMappings
               nova_pmem_namespaces: NovaPMEMNamespaces
+              nova::compute::libvirt::remove_unused_original_minimum_age_seconds: NovaImageCacheTTL
+              nova::compute::libvirt::swtpm_enabled: NovaEnableVTPM
+              nova::compute::vgpu::vgpu_types_device_addresses_mapping: NovaVGPUTypesDeviceAddressesMapping
+              compute_disable_irqbalance: NovaComputeDisableIrqBalance
+              nova::compute::libvirt::cpu_mode: NovaLibvirtCPUMode
+              nova::compute::libvirt::cpu_models: NovaLibvirtCPUModels
+              nova::compute::libvirt::cpu_model_extra_flags: NovaLibvirtCPUModelExtraFlags
+              nova_compute_opt_volumes: NovaComputeOptVolumes
+              nova_compute_opt_env_vars: NovaComputeOptEnvVars
+              nova::workarounds::never_download_image_if_on_rbd: NovaDisableImageDownloadToRbd
             - values: {get_param: [RoleParameters]}
           - values:
               NovaVcpuPinSet: {get_param: NovaVcpuPinSet}
@@ -593,9 +687,20 @@ resources:
               NovaCPUAllocationRatio: {get_param: NovaCPUAllocationRatio}
               NovaRAMAllocationRatio: {get_param: NovaRAMAllocationRatio}
               NovaDiskAllocationRatio: {get_param: NovaDiskAllocationRatio}
+              NovaEnableVTPM: {get_param: NovaEnableVTPM}
               NovaMaxDiskDevicesToAttach: {get_param: NovaMaxDiskDevicesToAttach}
               NovaPMEMMappings: {get_param: NovaPMEMMappings}
               NovaPMEMNamespaces: {get_param: NovaPMEMNamespaces}
+              NovaImageCacheTTL: {get_param: NovaImageCacheTTL}
+              NovaVGPUTypesDeviceAddressesMapping: {get_param: NovaVGPUTypesDeviceAddressesMapping}
+              NovaComputeDisableIrqBalance: {get_param: NovaComputeDisableIrqBalance}
+              NovaLibvirtCPUMode: {get_param: NovaLibvirtCPUMode}
+              NovaLibvirtCPUModels: {get_param: NovaLibvirtCPUModels}
+              NovaLibvirtCPUModelExtraFlags: {get_param: NovaLibvirtCPUModelExtraFlags}
+              NovaComputeOptVolumes: {get_param: NovaComputeOptVolumes}
+              NovaComputeOptEnvVars: {get_param: NovaComputeOptEnvVars}
+              NovaDisableImageDownloadToRbd: {get_param: NovaDisableImageDownloadToRbd}
+
 
 conditions:
   enable_instance_ha: {equals: [{get_param: EnableInstanceHA}, true]}
@@ -687,6 +792,7 @@ outputs:
             nova::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             nova::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             nova::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            nova::keystone::authtoken::interface: 'internal'
             nova::cinder::username: 'cinder'
             nova::cinder::auth_type: 'v3password'
             nova::cinder::project_name: 'service'
@@ -818,6 +924,10 @@ outputs:
                   expression: str($.data.debug)
                   data:
                     debug: {get_attr: [NovaBase, role_data, config_settings, 'nova::logging::debug']}
+              NOVA_STATEDIR_OWNERSHIP_SKIP:
+                list_join:
+                  - ':'
+                  - {get_param: NovaStatedirOwnershipSkip}
         step_5:
           map_merge:
             - nova_compute:
@@ -836,7 +946,7 @@ outputs:
                   list_concat:
                     - {get_attr: [ContainersCommon, volumes]}
                     - {get_attr: [NovaLogging, volumes]}
-                    - {get_param: NovaComputeOptVolumes}
+                    - {get_attr: [RoleParametersValue, value, nova_compute_opt_volumes]}
                     -
                       - /etc/ssh/ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
                       - /var/lib/kolla/config_files/nova_compute.json:/var/lib/kolla/config_files/config.json:ro
@@ -847,7 +957,7 @@ outputs:
                       - /lib/modules:/lib/modules:ro
                       - /run:/run
                       - /var/lib/iscsi:/var/lib/iscsi:z
-                      - /var/lib/libvirt:/var/lib/libvirt:shared,z
+                      - /var/lib/libvirt:/var/lib/libvirt:shared
                       - /sys/class/net:/sys/class/net
                       - /sys/bus/pci:/sys/bus/pci
                       - /boot:/boot:ro
@@ -860,7 +970,7 @@ outputs:
                       - []
                 environment:
                   map_merge:
-                    - {get_param: NovaComputeOptEnvVars}
+                    - {get_attr: [RoleParametersValue, value, nova_compute_opt_env_vars]}
                     - KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
                     - LIBGUESTFS_BACKEND: libvirt:qemu:///system
             - if:
@@ -1081,6 +1191,15 @@ outputs:
               with_items:
                 - ksm.service
                 - ksmtuned.service
+          - name: Is irqbalance enabled
+            set_fact:
+              compute_irqbalance_disabled: {get_attr: [RoleParametersValue, value, compute_disable_irqbalance]}
+          - name: disable irqbalance service on compute
+            when: compute_irqbalance_disabled|bool
+            service:
+              name: irqbalance.service
+              state: stopped
+              enabled: no
       deploy_steps_tasks:
         - name: validate nova-compute container state
           podman_container_info:

@@ -143,6 +143,7 @@ outputs:
             ironic::api::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             ironic::api::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::api::authtoken::region_name: {get_param: KeystoneRegion }
+            ironic::api::authtoken::interface: 'internal'
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -291,7 +292,7 @@ outputs:
             - { 'path': /var/log/containers/httpd/ironic-api, 'setype': container_file_t, 'mode': '0750' }
       external_upgrade_tasks:
         - when: step|int == 1
-          block:
+          block: &ironic_online_db_migration
             - name: Online data migration for Ironic
               command: "{{ container_cli }} exec ironic_api ironic-dbsync --config-file /etc/ironic/ironic.conf online_data_migrations"
               delegate_to: "{{ groups['ironic_api'][0] }}"
@@ -299,3 +300,6 @@ outputs:
               tags:
                 - online_upgrade
                 - online_upgrade_ironic
+      external_update_tasks:
+        - when: step|int == 1
+          block: *ironic_online_db_migration

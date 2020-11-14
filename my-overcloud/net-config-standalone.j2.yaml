@@ -31,6 +31,10 @@ parameters:
     default: ''
     description: default route for the {{network.name_lower}} network
     type: string
+  {{network.name}}NetworkVlanID:
+    default: {{network.vlan|default(1)}}
+    description: Vlan ID for the {{network.name_lower}} network traffic.
+    type: number
   {%- endfor %}
   ControlPlaneSubnetCidr:
     default: ''
@@ -85,6 +89,10 @@ parameters:
   DeployedServerPortMap:
     default: {}
     type: json
+  NeutronPublicInterface:
+    default: nic1
+    description: Which interface to add to the NeutronPhysicalBridge.
+    type: string
 
 conditions:
   standalone_net_config_override:
@@ -97,66 +105,57 @@ conditions:
 
 resources:
   OsNetConfigImpl:
-    type: OS::Heat::SoftwareConfig
+    type: OS::Heat::Value
     properties:
-      group: script
-      inputs:
-        - name: disable_configure_safe_defaults
-          default: true
-      config:
-        str_replace:
-          template:
-            get_file: network/scripts/run-os-net-config.sh
-          params:
-            $network_config:
+      value:
+        if:
+        - standalone_net_config_override
+        - {get_param: StandaloneNetConfigOverride}
+        - network_config:
+          - type: ovs_bridge
+            name: br-ctlplane
+            mtu: {get_param: InterfaceLocalMtu}
+            use_dhcp: false
+            dns_servers:
+              get_param: DnsServers
+            domain:
+              get_param: DnsSearchDomains
+            ovs_extra:
+              - "br-set-external-id br-ctlplane bridge-id br-ctlplane"
+            addresses:
+            - ip_netmask:
+                list_join:
+                - /
+                - - get_param: ControlPlaneIp
+                  - get_param: ControlPlaneSubnetCidr
+            -
               if:
-              - standalone_net_config_override
-              - {get_param: StandaloneNetConfigOverride}
-              - network_config:
-                - type: ovs_bridge
-                  name: br-ctlplane
-                  mtu: {get_param: InterfaceLocalMtu}
-                  use_dhcp: false
-                  dns_servers:
-                    get_param: DnsServers
-                  domain:
-                    get_param: DnsSearchDomains
-                  ovs_extra:
-                    - "br-set-external-id br-ctlplane bridge-id br-ctlplane"
-                  addresses:
-                  - ip_netmask:
-                      list_join:
-                      - /
-                      - - get_param: ControlPlaneIp
-                        - get_param: ControlPlaneSubnetCidr
-                  -
-                    if:
-                    - control_virtual_ip_unset
-                    - {}
-                    - ip_netmask:
-                        list_join:
-                        - /
-                        - - {get_param: [DeployedServerPortMap, 'control_virtual_ip', fixed_ips, 0, ip_address]}
-                          - {if: [control_virtual_ip_is_ipv6, '128', '32']}
-                  -
-                    if:
-                    - public_virtual_ip_unset
-                    - {}
-                    - ip_netmask:
-                        list_join:
-                        - /
-                        - - {get_param: [DeployedServerPortMap, 'public_virtual_ip', fixed_ips, 0, ip_address]}
-                          - {if: [public_virtual_ip_is_ipv6, '128', '32']}
-                  routes: {get_param: ControlPlaneStaticRoutes}
-                  members:
-                  - type: interface
-                    name: interface_name
-                    # force the MAC address of the bridge to this interface
-                    primary: true
-                    mtu: {get_param: InterfaceLocalMtu}
+              - control_virtual_ip_unset
+              - {}
+              - ip_netmask:
+                  list_join:
+                  - /
+                  - - {get_param: [DeployedServerPortMap, 'control_virtual_ip', fixed_ips, 0, ip_address]}
+                    - {if: [control_virtual_ip_is_ipv6, '128', '32']}
+            -
+              if:
+              - public_virtual_ip_unset
+              - {}
+              - ip_netmask:
+                  list_join:
+                  - /
+                  - - {get_param: [DeployedServerPortMap, 'public_virtual_ip', fixed_ips, 0, ip_address]}
+                    - {if: [public_virtual_ip_is_ipv6, '128', '32']}
+            routes: {get_param: ControlPlaneStaticRoutes}
+            members:
+            - type: interface
+              name: {get_param: NeutronPublicInterface}
+              # force the MAC address of the bridge to this interface
+              primary: true
+              mtu: {get_param: InterfaceLocalMtu}
 outputs:
-  OS::stack_id:
+  config:
     description: The OsNetConfigImpl resource.
     value:
-      get_resource: OsNetConfigImpl
+      get_attr: [OsNetConfigImpl, value]
 

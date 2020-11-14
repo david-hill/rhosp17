@@ -34,6 +34,23 @@ parameters:
     default: {}
     description: Mapping of firewall rules.
     type: json
+    tags:
+      - role_specific
+
+resources:
+  # Merging role-specific parameters (RoleParameters) with the default parameters.
+  # RoleParameters will have the precedence over the default parameters.
+  RoleParametersValue:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        map_replace:
+          - map_replace:
+            - extra_firewall_rules: ExtraFirewallRules
+            - values: {get_param: [RoleParameters]}
+          - values:
+              ExtraFirewallRules: {get_param: ExtraFirewallRules}
 
 conditions:
   no_ctlplane:
@@ -60,7 +77,7 @@ outputs:
                     source: <%net_cidr%>
                     proto: 'tcp'
                     dport: 22
-          - {get_param: ExtraFirewallRules}
+          - {get_attr: [RoleParametersValue, value, extra_firewall_rules]}
       host_prep_tasks:
         - if:
             - no_ctlplane
@@ -74,56 +91,43 @@ outputs:
               debug:
                 msg: |
                   CIDRs found in the ctlplane network tags.
-      deploy_steps_tasks:
-        - when:
-            - (step|int) == 0
-          block:
-            - name: create iptables service
-              copy:
-                dest: /etc/systemd/system/tripleo-iptables.service
-                content: |
-                  [Unit]
-                  Description=Initialize iptables
-                  Before=iptables.service
-                  AssertPathExists=/etc/sysconfig/iptables
-
-                  [Service]
-                  Type=oneshot
-                  ExecStart=/usr/sbin/iptables -t raw -nL
-                  Environment=BOOTUP=serial
-                  Environment=CONSOLETYPE=serial
-                  StandardOutput=syslog
-                  StandardError=syslog
-                  [Install]
-                  WantedBy=basic.target
-            - name: create ip6tables service
-              copy:
-                dest: /etc/systemd/system/tripleo-ip6tables.service
-                content: |
-                  [Unit]
-                  Description=Initialize ip6tables
-                  Before=ip6tables.service
-                  AssertPathExists=/etc/sysconfig/ip6tables
-
-                  [Service]
-                  Type=oneshot
-                  ExecStart=/usr/sbin/ip6tables -t raw -nL
-                  Environment=BOOTUP=serial
-                  Environment=CONSOLETYPE=serial
-                  StandardOutput=syslog
-                  StandardError=syslog
-                  [Install]
-                  WantedBy=basic.target
-            - name: enable tripleo-iptables service (and do a daemon-reload systemd)
+      update_tasks:
+        - name: Cleanup tripleo-iptables services
+          when:
+            - (step | int) == 1
+          block: &tripleo_firewall_teardown
+            - name: Disable tripleo-iptables.service
               systemd:
-                daemon_reload: yes
-                enabled: yes
                 name: tripleo-iptables.service
-            - name: enable tripleo-ip6tables service
+                state: stopped
+                enabled: false
+              register: systemd_tripleo_iptables
+              failed_when: false
+            - name: Cleanup tripleo-iptables.services
+              file:
+                path: /etc/systemd/system/tripleo-iptables.service
+                state: absent
+            - name: Disable tripleo-ip6tables.service
               systemd:
-                enabled: yes
                 name: tripleo-ip6tables.service
+                state: stopped
+                enabled: false
+              register: systemd_tripleo_ip6tables
+              failed_when: false
+            - name: Cleanup tripleo-ip6tables.services
+              file:
+                path: /etc/systemd/system/tripleo-ip6tables.service
+                state: absent
+            - name: Reload systemd
+              systemd:
+                daemon_reload: true
+              when:
+                - (systemd_tripleo_iptables is changed or systemd_tripleo_ip6tables is changed)
       upgrade_tasks:
+        - name: Cleanup tripleo-iptables services
+          when:
+            - (step | int) == 1
+          block: *tripleo_firewall_teardown
         - when:
             - (step | int) == 3
           block:

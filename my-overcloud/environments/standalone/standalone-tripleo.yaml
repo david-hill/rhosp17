@@ -25,7 +25,7 @@
 #   openstack overcloud roles generate -o ~/roles_data.yaml Standalone
 parameter_defaults:
   # Set to true to append per network Vips to /etc/hosts on each node.
-  # Type: string
+  # Type: boolean
   AddVipsToEtcHosts: False
 
   # DNS servers to use for the Overcloud (2 max for some implementations). If not set the nameservers configured in the ctlplane subnet's dns_nameservers attribute will be used.
@@ -35,6 +35,10 @@ parameter_defaults:
   # Set to true to enable package installation at deploy time
   # Type: boolean
   EnablePackageInstall: True
+
+  # Allow to enable/disable safe networking defaults if os-net-config would fail to run with the provided config.
+  # Type: boolean
+  NetworkSafeDefaults: True
 
   # NTP servers list. Defaulted to a set of pool.ntp.org servers in order to have a sane default for Pacemaker deployments when not configuring this parameter by default.
   # Type: comma_delimited_list
@@ -48,6 +52,10 @@ parameter_defaults:
   # Type: boolean
   SshFirewallAllowAll: True
 
+  # Standalone NetworkConfigTemplate
+  # Type: string
+  StandaloneNetworkConfigTemplate: templates/standalone.j2
+
   # How many replicas to use in the swift rings.
   # Type: number
   SwiftReplicas: 1
@@ -56,6 +64,8 @@ resource_registry:
   OS::TripleO::Network::Ports::ControlPlaneVipPort: ../../deployed-server/deployed-neutron-port.yaml
   OS::TripleO::Network::Ports::OVNDBsVipPort: ../../network/ports/noop.yaml
   OS::TripleO::Network::Ports::RedisVipPort: ../../network/ports/noop.yaml
+  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
+  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -113,4 +123,3 @@ resource_registry:
   OS::TripleO::Services::SaharaEngine: OS::Heat::None
   OS::TripleO::Services::Tmpwatch: ../../deployment/logrotate/tmpwatch-install.yaml
   OS::TripleO::Services::Zaqar: OS::Heat::None
-  OS::TripleO::Standalone::Net::SoftwareConfig: ../../net-config-standalone.yaml

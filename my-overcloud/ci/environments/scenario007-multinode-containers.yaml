@@ -1,7 +1,5 @@
 resource_registry:
-  OS::TripleO::Controller::Net::SoftwareConfig: ../common/net-config-multinode-os-net-config.yaml
-  OS::TripleO::Compute::Net::SoftwareConfig: ../common/net-config-multinode-os-net-config.yaml
-  OS::TripleO::Docker::NeutronMl2PluginBase: ../../deployment/neutron/neutron-plugin-ml2.yaml
+  OS::TripleO::Services::NeutronMl2PluginBase: ../../deployment/neutron/neutron-plugin-ml2.yaml
   OS::TripleO::Services::NeutronApi: ../../deployment/neutron/neutron-api-container-puppet.yaml
   OS::TripleO::Services::NeutronCorePlugin: ../../deployment/neutron/neutron-plugin-ml2-container-puppet.yaml
   OS::TripleO::Services::NeutronMetadataAgent: ../../deployment/neutron/neutron-metadata-container-puppet.yaml
@@ -10,9 +8,6 @@ resource_registry:
   OS::TripleO::Services::NeutronL3Agent: ../../deployment/neutron/neutron-l3-container-puppet.yaml
   OS::TripleO::Services::ComputeNeutronOvsAgent: ../../deployment/neutron/neutron-ovs-agent-container-puppet.yaml
 
-  # Some infra instances don't pass the ping test but are otherwise working.
-  # Since the OVB jobs also test this functionality we can shut it off here.
-  OS::TripleO::AllNodes::Validation: ../common/all-nodes-validation-disabled.yaml
   OS::TripleO::Services::NovaMigrationTarget: OS::Heat::None
   OS::TripleO::Services::SwiftProxy: OS::Heat::None
   OS::TripleO::Services::SwiftStorage: OS::Heat::None
@@ -28,6 +23,8 @@ resource_registry:
   OS::TripleO::Services::CinderBackup: OS::Heat::None
   OS::TripleO::Services::BlockStorageCinderVolume: OS::Heat::None
 parameter_defaults:
+  ControllerNetworkConfigTemplate: 'templates/ci/multinode.j2'
+  ComputeNetworkConfigTemplate: 'templates/ci/multinode.j2'
   ControllerServices:
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::Clustercheck
@@ -70,9 +67,9 @@ parameter_defaults:
     - OS::TripleO::Services::Multipathd
   ControllerExtraConfig:
     nova::compute::libvirt::services::libvirt_virt_type: qemu
-    nova::compute::libvirt::libvirt_virt_type: qemu
+    nova::compute::libvirt::virt_type: qemu
     # Required for Centos 7.3 and Qemu 2.6.0
-    nova::compute::libvirt::libvirt_cpu_mode: 'none'
+    nova::compute::libvirt::cpu_mode: 'none'
   # For ML2/OVS
   NeutronMechanismDrivers: 'openvswitch'
   NeutronPluginExtensions: "qos,port_security"
