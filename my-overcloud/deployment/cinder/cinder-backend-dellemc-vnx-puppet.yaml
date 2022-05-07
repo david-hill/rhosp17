@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder Dell EMC VNX backend
@@ -72,9 +72,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -109,8 +106,6 @@ outputs:
             cinder::backend::emc_vnx::storage_vnx_auth_type: {get_param: CinderDellEMCVNXAuthType}
             cinder::backend::emc_vnx::storage_vnx_security_file_dir: {get_param: CinderDellEMCVNXStorageSecurityFileDir}
             cinder::backend::emc_vnx::naviseccli_path: {get_param: CinderDellEMCVNXNaviSecCliPath}
-          -
-            if:
-            - {equals : [{get_param: CinderDellEMCVNXAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderDellEMCVNXAvailabilityZone}, '']}
             - cinder::backend::emc_vnx::backend_availability_zone: {get_param: CinderDellEMCVNXAvailabilityZone}

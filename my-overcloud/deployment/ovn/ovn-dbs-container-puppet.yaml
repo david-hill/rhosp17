@@ -1,9 +1,12 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Ovn DBs service
 
 parameters:
+  RootStackName:
+    description: The name of the stack/plan.
+    type: string
   ContainerOvnNbDbImage:
     description: image
     type: string
@@ -28,9 +31,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -47,6 +47,27 @@ parameters:
     description: Port of the OVN Southbound DB server
     type: number
     default: 6642
+  OVNDBsVirtualFixedIPs:
+    default: []
+    description: >
+        Control the IP allocation for the virtual IP used by OVN DBs. E.g.
+        [{'ip_address':'1.2.3.4'}]
+    type: json
+  ServiceVips:
+    default: {}
+    type: json
+
+conditions:
+  ovn_dbs_virtual_fixed_ip_set:
+    not:
+      equals:
+        - get_param: OVNDBsVirtualFixedIPs
+        - []
+  ovn_dbs_service_vip_set:
+    not:
+      equals:
+        - get_param: [ServiceVips, ovn_dbs]
+        - ''
 
 resources:
 
@@ -79,11 +100,7 @@ outputs:
       # the NB and SB DB servers to listen on the proper IP address/port
       # in the docker_config section.
       # puppet_config is defined to satisfy the pep8 validations.
-      puppet_config:
-        config_volume: ''
-        config_image: ''
-        step_config: |
-          include tripleo::profile::base::neutron::ovn_northd #unused
+      puppet_config: {}
       kolla_config:
         /var/lib/kolla/config_files/ovn_north_db_server.json:
           command: /usr/local/bin/start-nb-db-server
@@ -205,4 +222,23 @@ outputs:
           with_items:
             - { 'path': /var/log/containers/openvswitch, 'setype': container_file_t, 'mode': '0750' }
             - { 'path': /var/lib/openvswitch/ovn, 'setype': container_file_t }
+      external_deploy_tasks:
+        - when:
+            - step|int == 0
+          name: ovn_external_deploy_init
+          block:
+            - name: create ovn_dbs virtual ip
+              tripleo_service_vip:
+                playbook_dir: "{{ playbook_dir }}"
+                stack_name: {get_param: RootStackName}
+                service_name: ovn_dbs
+                network: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                fixed_ips:
+                  if:
+                    - ovn_dbs_virtual_fixed_ip_set
+                    - {get_param: OVNDBsVirtualFixedIPs}
+                    - if:
+                        - ovn_dbs_service_vip_set
+                        - [{ip_address: {get_param: [ServiceVips, ovn_dbs]}}]
+                        - [{subnet: {get_param: [ServiceData, vip_subnet_map, ovn_dbs]}}]
       upgrade_tasks: []

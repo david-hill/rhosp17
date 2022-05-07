@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Ceph Client service.
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -37,26 +34,9 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-
-  CephClientAnsibleVars:
-    type: OS::Heat::Value
-    properties:
-      type: json
-      value:
-        vars: {}
-
-  CephClientConfigOverrides:
-    type: OS::Heat::Value
-    properties:
-      type: json
-      value:
-        vars:
-          client:
-            rbd_concurrent_management_ops: 20
 
 outputs:
   role_data:
@@ -64,10 +44,7 @@ outputs:
     value:
       service_name: ceph_client
       upgrade_tasks: []
-      puppet_config:
-        config_image: ''
-        config_volume: ''
-        step_config: ''
+      puppet_config: {}
       docker_config: {}
       external_deploy_tasks:
         list_concat:
@@ -76,13 +53,14 @@ outputs:
             when: step|int == 1
             tags:
               - ceph
-              - ceph_fstobs
-              - ceph_systemd
+              - cephamd_adopt
             block:
               - name: set ceph-ansible group vars clients
                 set_fact:
-                  ceph_ansible_group_vars_clients: {get_attr: [CephClientAnsibleVars, value, vars]}
-                  ceph_client_config_overrides: {get_attr: [CephClientConfigOverrides, value, vars]}
+                  ceph_ansible_group_vars_clients: {}
+                  ceph_client_config_overrides:
+                    client:
+                      rbd_concurrent_management_ops: 20
               - name: generate ceph-ansible group vars clients
                 copy:
                   dest: "{{playbook_dir}}/ceph-ansible/group_vars/clients.yml"

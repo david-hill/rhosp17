@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: Host config and reboot service which configures Kernel Args and reboot
 
@@ -15,9 +15,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -36,6 +33,19 @@ parameters:
     default: ""
     type: string
     description: Kernel Args to apply to the host
+    tags:
+      - role_specific
+  KernelArgsDeferReboot:
+    default: false
+    type: boolean
+    description: >
+      When enabled, nodes will not get rebooted automatically by tripleo-kernel
+      if KernelArgs have been changed. Operators will have to manually reboot
+      nodes after the deployment or update process is completed.
+
+      Leaving this enabled during a scale-up operation will prevent reboot on
+      new nodes. This might cause deployment errors as the KernelArgs will not
+      be applied.
     tags:
       - role_specific
   TunedProfileName:
@@ -57,6 +67,33 @@ parameters:
     default: 900
     type: number
     description: Timeout in seconds to specify the wait time for ansible node reboot
+  Hugepages:
+    default: {}
+    type: json
+    description: >
+      Hash for hugepage configuration
+      Example:
+        Hugepages:
+          2048:
+            count: 100
+            default: false
+          1048576:
+            count: 100
+            default: true
+    tags:
+      - role_specific
+  ReconfigureHugepages:
+    default: false
+    type: boolean
+    description: >
+      By default, tripleo-kernel will configure the provided Hugepages as specified by operators
+      but it won't try to remove Hugepages configured on the host that are not part of the TripleO
+      paramater. Enabling this setting will make sure everything is reconfigured exactly like the
+      TripleO parameter, otherwise we just add the content of the Hugepages parameter to what's
+      already in place.
+    tags:
+      - role_specific
+
 
 resources:
   RoleParametersValue:
@@ -69,11 +106,17 @@ resources:
             - tuned_profile: TunedProfileName
               isolated_cores: IsolCpusList
               kernel_args: KernelArgs
+              kernel_args_defer_reboot: KernelArgsDeferReboot
+              hugepages: Hugepages
+              reconfigure_hugepages: ReconfigureHugepages
             - values: {get_param: [RoleParameters]}
           - values:
               TunedProfileName: {get_param: TunedProfileName}
               IsolCpusList: {get_param: IsolCpusList}
               KernelArgs: {get_param: KernelArgs}
+              KernelArgsDeferReboot: {get_param: KernelArgsDeferReboot}
+              Hugepages: {get_param: Hugepages}
+              ReconfigureHugepages: {get_param: ReconfigureHugepages}
 
 outputs:
   role_data:
@@ -97,6 +140,9 @@ outputs:
             tasks_from: kernelargs.yml
           vars:
             tripleo_kernel_args: {get_attr: [RoleParametersValue, value, kernel_args]}
+            tripleo_kernel_hugepages: {get_attr: [RoleParametersValue, value, hugepages]}
+            tripleo_kernel_hugepages_remove: {get_attr: [RoleParametersValue, value, reconfigure_hugepages]}
+            tripleo_kernel_defer_reboot: {get_attr: [RoleParametersValue, value, kernel_args_defer_reboot]}
             tripleo_kernel_reboot_timeout: {get_param: NodeRebootWaitTimeout}
       upgrade_tasks:
         - name: upgrade prepare for leapp to align kernel arg shortcommings in leapp

@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Barbican client configuration
@@ -18,9 +18,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -51,9 +48,10 @@ outputs:
             get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]
         cinder_volume: *cinder_barbican_config
         cinder_backup: *cinder_barbican_config
-        glance_api:
+        glance_api: &glance_barbican_config
           glance::api::keymgr_backend: barbican
           glance::api::keymgr_encryption_api_url:
             get_param: [EndpointMap, BarbicanInternal, uri]
           glance::api::keymgr_encryption_auth_url:
             get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]
+        glance_api_edge: *glance_barbican_config

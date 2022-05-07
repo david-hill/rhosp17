@@ -1,4 +1,4 @@
-#!/usr/libexec/platform-python
+#!/usr/bin/python3
 #
 # Copyright 2018 Red Hat Inc.
 #
@@ -244,4 +244,4 @@ def get_exclude_paths():
 
 
 if __name__ == '__main__':
-    NovaStatedirOwnershipManager('/var/lib/nova', exclude_paths=get_exclude_paths())
+    NovaStatedirOwnershipManager('/var/lib/nova', exclude_paths=get_exclude_paths()).run()

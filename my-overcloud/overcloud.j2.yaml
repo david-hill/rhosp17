@@ -7,7 +7,7 @@
 {%- endfor -%}
 {%- set primary_role_name = primary_role[0].name -%}
 # primary role is: {{primary_role_name}}
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Deploy an OpenStack environment, consisting of several node types (roles),
@@ -121,10 +121,6 @@ parameters:
     default: []
     description: A list of DNS search domains to be added (in order) to resolv.conf.
     type: comma_delimited_list
-  NeutronPublicInterface:
-    default: nic1
-    description: Which interface to add to the NeutronPhysicalBridge.
-    type: string
   ControlFixedIPs:
     default: []
     description: >
@@ -135,18 +131,6 @@ parameters:
     type: string
     default: unset
     description: Salt for the rabbit cookie, change this to force the randomly generated rabbit cookie to change.
-  RedisVirtualFixedIPs:
-    default: []
-    description: >
-        Control the IP allocation for the virtual IP used by Redis. E.g.
-        [{'ip_address':'1.2.3.4'}]
-    type: json
-  OVNDBsVirtualFixedIPs:
-    default: []
-    description: >
-        Control the IP allocation for the virtual IP used by OVN DBs. E.g.
-        [{'ip_address':'1.2.3.4'}]
-    type: json
   CloudDomain:
     default: 'localdomain'
     type: string
@@ -159,11 +143,6 @@ parameters:
       Extra properties or metadata passed to Nova for the created nodes in
       the overcloud. It's accessible via the Nova metadata API.
     type: json
-  NetworkDeploymentActions:
-    type: comma_delimited_list
-    description: >
-      Heat action when to apply network configuration changes
-    default: ['CREATE']
 # Compute-specific params
 # FIXME(shardy) handle these deprecated names as they don't match compute.yaml
   HypervisorNeutronPhysicalBridge:
@@ -256,11 +235,14 @@ parameters:
                  resource_registry) which represent nested stacks
                  for each service that should get installed on the {{role.name}} role.
     type: comma_delimited_list
-  {{role.name}}NetworkDeploymentActions:
-    type: comma_delimited_list
+  {{role.name}}NetworkConfigUpdate:
+    type: boolean
     description: >
-      Heat action when to apply network configuration changes
-    default: []
+      When set to "True", existing networks will be updated on the overcloud.
+      This parameter replaces the functionality previously provided by
+      NetworkDeploymentActions. Defaults to "False" so that only new nodes will
+      have their networks configured. This is a role based parameter.
+    default: False
   {{role.name}}AnyErrorsFatal:
     default: yes
     type: string
@@ -326,6 +308,26 @@ parameters:
     description: |
       Name of the subnet on ctlplane network for this role.
     type: string
+
+  {{role.name}}ServiceNetMap:
+    default: {}
+    description: |
+      Role specific ServiceNetMap overrides, the map provided will be merged
+      with the global ServiceNetMap when passing the ServiceNetMap to the
+      {{role.name}}ServiceChain resource and the {{role.name}} resource group.
+      For example:
+      {{role.name}}ServiceNetMap:
+        NovaLibvirtNetwork: internal_api_leaf2
+    type: json
+
+  {{role.name}}NetConfigOverride:
+    default: {}
+    description: |
+      Custom JSON data to be used to override the os-net-config config.
+      This is meant to be used by net_config_override parameter in tripleoclient
+      to provide an easy means to pass in custom net configs for the Undercloud.
+    type: json
+
 {% endfor %}
 
   # Identifiers to trigger tasks on nodes
@@ -400,6 +402,10 @@ parameters:
       dns_nameservers attribute will be used.
     type: comma_delimited_list
 
+  RootStackName:
+    description: The name of the stack/plan.
+    type: string
+
 {% for role in roles %}
 {%- if role.deprecated_param_scheduler_hints is defined or role.deprecated_param_extraconfig is defined %}
 {%- if not parameter_groups_defined|default(false) %}
@@ -433,16 +439,6 @@ conditions:
       equals:
         - get_param: PublicVirtualFixedIPs
         - []
-  redis_virtual_fixed_ip_set:
-    not:
-      equals:
-        - get_param: RedisVirtualFixedIPs
-        - []
-  ovn_dbs_virtual_fixed_ip_set:
-    not:
-      equals:
-        - get_param: OVNDBsVirtualFixedIPs
-        - []
   set_default_mysql_cell_internal:
     or:
       - equals:
@@ -455,13 +451,6 @@ conditions:
         - equals:
           - get_param: [EndpointMapOverride, MysqlCellInternal]
           - ''
-{%- for role in roles %}
-  {{role.name}}_network_deployment_actions_exists:
-    not:
-      equals:
-        - {get_param: {{role.name}}NetworkDeploymentActions}
-        - []
-{%- endfor %}
   set_default_nova_vnc_proxy_cell_public:
     or:
       - equals:
@@ -532,19 +521,6 @@ resources:
               HOST: {get_param: CloudName{{network.name}}}
   {%- endif %}
 {%- endfor %}
-
-  HeatAuthEncryptionKey:
-    type: OS::TripleO::RandomString
-
-  PcsdPassword:
-    type: OS::TripleO::RandomString
-    properties:
-      length: 16
-
-  HorizonSecret:
-    type: OS::TripleO::RandomString
-    properties:
-      length: 64
 
   NetCidrMapValue:
     type: OS::Heat::Value
@@ -647,13 +623,16 @@ resources:
     properties:
       Services:
         get_param: {{role.name}}Services
-      ServiceNetMap: {get_attr: [ServiceNetMap, service_net_map]}
+      ServiceNetMap:
+        map_merge:
+          - {get_attr: [ServiceNetMap, service_net_map]}
+          - {get_param: {{role.name}}ServiceNetMap}
       ServiceData:
         net_cidr_map: {get_attr: [NetCidrMapValue, value]}
         net_vip_map: {get_attr: [VipMap, net_ip_map]}
         net_ip_version_map: {get_attr: [NetIpVersionMapValue, value]}
+        vip_subnet_map: {get_attr: [ServiceNetMap, vip_subnet_map]}
       EndpointMap: {get_attr: [EndpointMapData, value]}
-      DefaultPasswords: {get_attr: [DefaultPasswords, passwords]}
       RoleName: {{role.name}}
       RoleParameters:
         map_merge:
@@ -668,15 +647,6 @@ resources:
       type: json
       value: {get_attr: [{{role.name}}ServiceChain, role_data]}
 
-  {{role.name}}NetworkDeploymentActionsValue:
-    type: OS::Heat::Value
-    properties:
-      value:
-        - if:
-          - {{role.name}}_network_deployment_actions_exists
-          - {get_param: {{role.name}}NetworkDeploymentActions}
-          - {get_param: NetworkDeploymentActions}
-
   {{role.name}}ConfigData:
     type: OS::Heat::Value
     properties:
@@ -687,13 +657,14 @@ resources:
         role_extraconfig:
           map_merge:
             - tripleo::profile::base::metrics::collectd::sensubility::subscriptions: {get_attr: [{{role.name}}ServiceChainRoleData, value, monitoring_subscriptions]}
+            - tripleo_collectd_sensubility_subscriptions: {get_attr: [{{role.name}}ServiceChainRoleData, value, monitoring_subscriptions]}
 {%- if role.deprecated_param_extraconfig is defined %}
             - {get_param: {{role.deprecated_param_extraconfig}}}
 {%- endif %}
             - {get_param: {{role.name}}ExtraConfig}
         extraconfig: {get_param: ExtraConfig}
         hieradata_files:
-          - '"%{::uuid}"'
+          - '%{::uuid}'
           - fqdn
           - docker_puppet # Optionally provided by container-puppet.sh
           - ansible_managed
@@ -709,7 +680,8 @@ resources:
           - all_nodes # provided by tripleo_hieradata
           - vip_data # provided by tripleo_hieradata
           - net_ip_map
-          - '"%{::osfamily}"'
+          - ovn_chassis_mac_map # provided by tripleo_hieradata
+          - '%{::osfamily}'
           # The following are required for compatibility with the Controller role
           # where some vendor integrations added hieradata via ExtraConfigPre
           - neutron_bigswitch_data # Optionally provided by Controller/ComputeExtraConfigPre
@@ -828,7 +800,10 @@ resources:
         type: OS::TripleO::{{role.name}}
         properties:
           CloudDomain: {get_param: CloudDomain}
-          ServiceNetMap: {get_attr: [ServiceNetMap, service_net_map]}
+          ServiceNetMap:
+            map_merge:
+              - {get_attr: [ServiceNetMap, service_net_map]}
+              - {get_param: {{role.name}}ServiceNetMap}
           EndpointMap: {get_attr: [EndpointMapData, value]}
           Hostname:
             str_replace:
@@ -947,34 +922,11 @@ resources:
           - get_attr: [{{role.name}}ServiceChainRoleData, value, global_config_settings]
 {% endfor %}
 
-  MysqlRootPassword:
-    type: OS::TripleO::RandomString
-    properties:
-      length: 10
-
-  RabbitCookie:
-    type: OS::TripleO::RandomString
-    properties:
-      length: 20
-      salt: {get_param: RabbitCookieSalt}
-
-  DefaultPasswords:
-    type: OS::TripleO::DefaultPasswords
-    properties:
-      DefaultMysqlRootPassword: {get_attr: [MysqlRootPassword, value]}
-      DefaultRabbitCookie: {get_attr: [RabbitCookie, value]}
-      DefaultHeatAuthEncryptionKey: {get_attr: [HeatAuthEncryptionKey, value]}
-      DefaultPcsdPassword: {get_attr: [PcsdPassword, value]}
-      DefaultHorizonSecret: {get_attr: [HorizonSecret, value]}
-
   # creates the network architecture
   Networks:
     type: OS::TripleO::Network
     properties:
       CtlplaneNetworkCidrs: {get_attr: [ControlVirtualIP, network, tags]}
-
-  OVNMacAddressNetwork:
-    type: OS::TripleO::OVNMacAddressNetwork
 
 {%- for role in roles %}
   {{role.name}}GroupVars:
@@ -996,18 +948,21 @@ resources:
             - - default: true
                 next_hop: {get_attr: [Networks, net_attributes_map, ctlplane, subnets, {get_param: {{role.name}}ControlPlaneSubnet}, gateway_ip]}
           {%- endif %}
+        # MTU is not filtered on role.networks, for DVR we need the External MTU on the exteranl_bridge
+    {% for network in networks if network.enabled|default(true) %}
+        {{network.name_lower}}_mtu: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, network, mtu]}
+    {%- endfor %}
     {%- for network in networks if network.enabled|default(true) and network.name in role.networks|default([]) %}
       {%- if role.networks is mapping %}
         {%- set _role_net_subnet = role.networks[network.name]['subnet'] %}
       {%- else %}
         {%- set _role_net_subnet = network.name_lower + '_subnet' %}
       {%- endif %}
-        {{network.name_lower}}_mtu: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, network, mtu]}
         {{network.name_lower}}_gateway_ip: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, gateway_ip]}
         {{network.name_lower}}_host_routes:
           list_concat_unique:
             - {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, host_routes]}
-          {%- if network.name in role.default_route_networks %}
+          {%- if role.default_route_networks is defined and network.name in role.default_route_networks %}
             - - default: true
                 next_hop: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, gateway_ip]}
           {%- endif %}
@@ -1030,21 +985,25 @@ resources:
           {{network.name}}_cidr: {str_split: ['/', {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, cidr]}, 1]}
       {%- endfor %}
         dns_search_domains: {get_param: DnsSearchDomains}
-        bound_interface_ovs_options: {get_param: BondInterfaceOvsOptions}
+        bond_interface_ovs_options: {get_param: BondInterfaceOvsOptions}
         local_mtu: {get_param: {{role.name}}LocalMtu}
         role_networks:
         {%- for network in networks if network.enabled|default(true) and network.name in role.networks|default([]) %}
           - {{network.name}}
         {%- endfor %}
-        role_networks_lower:
-        {%- for network in networks if network.enabled|default(true) and network.name in role.networks|default([]) %}
+        networks_lower:
+        {%- for network in networks if network.enabled|default(true) %}
           {{network.name}}: {{network.name_lower}}
+        {%- endfor %}
+        networks_all:
+        {%- for network in networks if network.enabled|default(true) %}
+          - {{network.name}}
         {%- endfor %}
         service_metadata_settings: {get_attr: [{{role.name}}ServiceChainRoleData, value, service_metadata_settings]}
         tripleo_network_config_template: {get_param: {{role.name}}NetworkConfigTemplate}
         tripleo_network_config_with_ansible: {get_param: NetworkConfigWithAnsible}
-        default_route_networks: {{role.default_route_networks}}
-        networks_skip_config: {{role.networks_skip_config }}
+        default_route_networks: {{role.default_route_networks|default(['ControlPlane'])}}
+        networks_skip_config: {{ role.networks_skip_config|default([]) }}
         role_tags: {{role.tags}}
 
   {{role.name}}NetworkConfig:
@@ -1076,7 +1035,7 @@ resources:
       {{network.name}}InterfaceRoutes:
         list_concat_unique:
           - {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, host_routes]}
-        {%- if network.name in role.default_route_networks %}
+        {%- if role.default_route_networks is defined and network.name in role.default_route_networks %}
           - - default: true
               next_hop: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, gateway_ip]}
         {%- endif %}
@@ -1088,7 +1047,7 @@ resources:
                    not $.data.where($.startsWith('tripleo_vlan_id')).len() => 1,
                    true => int($.data.where($.startsWith('tripleo_vlan_id')).first().split('=').last()))
           data: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, tags]}
-    {%- if network.name in role.default_route_networks %}
+    {%- if role.default_route_networks is defined and network.name in role.default_route_networks %}
       {{network.name}}InterfaceDefaultRoute: {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{_role_net_subnet}}, gateway_ip]}
     {%- endif %}
   {%- endfor %}
@@ -1107,40 +1066,12 @@ resources:
         - [{subnet: {get_attr: [ServiceNetMap, vip_subnet_map, ctlplane]}}]
         - get_param: ControlFixedIPs
       replacement_policy: AUTO
-
-  RedisVirtualIP:
-    depends_on: [Networks, ServiceNetMap]
-    type: OS::TripleO::Network::Ports::RedisVipPort
-    properties:
-      ControlPlaneIP: {get_attr: [ControlVirtualIP, fixed_ips, 0, ip_address]}
-      ControlPlaneSubnetCidr: {str_split: ['/', {get_attr: [Networks, net_attributes_map, ctlplane, subnets, {get_attr: [ServiceNetMap, vip_subnet_map, ctlplane]}, cidr]}, 1]}
-      ControlPlaneNetwork: {get_param: NeutronControlPlaneID}
-      PortName: redis_virtual_ip
-      DnsName: null
-      NetworkName: {get_attr: [ServiceNetMap, service_net_map, RedisNetwork]}
-      ServiceName: redis
-      FixedIPs:
-        if:
-        - redis_virtual_fixed_ip_set
-        - {get_param: RedisVirtualFixedIPs}
-        - [{subnet: {get_attr: [ServiceNetMap, vip_subnet_map, redis]}}]
-
-  OVNDBsVirtualIP:
-    depends_on: [Networks, ServiceNetMap]
-    type: OS::TripleO::Network::Ports::OVNDBsVipPort
-    properties:
-      ControlPlaneIP: {get_attr: [ControlVirtualIP, fixed_ips, 0, ip_address]}
-      ControlPlaneSubnetCidr: {str_split: ['/', {get_attr: [Networks, net_attributes_map, ctlplane, subnets, {get_attr: [ServiceNetMap, vip_subnet_map, ctlplane]}, cidr]}, 1]}
-      ControlPlaneNetwork: {get_param: NeutronControlPlaneID}
-      PortName: ovn_dbs_virtual_ip
-      DnsName: null
-      NetworkName: {get_attr: [ServiceNetMap, service_net_map, OvnDbsNetwork]}
-      ServiceName: ovn_dbs
-      FixedIPs:
-        if:
-        - ovn_dbs_virtual_fixed_ip_set
-        - {get_param: OVNDBsVirtualFixedIPs}
-        - [{subnet: {get_attr: [ServiceNetMap, vip_subnet_map, ovn_dbs]}}]
+      tags:
+        - tripleo_vip_net=ctlplane
+        - str_replace:
+            template: tripleo_stack_name=$STACK_NAME
+            params:
+              $STACK_NAME: {get_param: 'OS::stack_name'}
 
 {%- for network in networks if network.vip|default(false) and network.enabled|default(true) %}
   {%- if network.name == 'External' %}
@@ -1174,6 +1105,7 @@ resources:
         - {get_param: {{network.name}}VirtualFixedIPs}
         {%- endif %}
         - [{subnet: {get_attr: [ServiceNetMap, vip_subnet_map, {{network.name}}]}}]
+      IsVirtualIP: true
 {%- endfor %}
 
   VipMap:
@@ -1255,6 +1187,24 @@ resources:
       {{role.name}}Count: {get_param: {{role.name}}Count}
 {%- endfor %}
       ServiceNetMapLower: {get_attr: [ServiceNetMap, service_net_map_lower]}
+      PingTestGatewayIPsMap:
+{%- for role in roles %}
+        {{role.name}}:
+          yaql:
+            expression: list($.data.where($ != null)).flatten()
+            data:
+              - {get_attr: [Networks, net_attributes_map, ctlplane, subnets, {get_param: {{role.name}}ControlPlaneSubnet}, gateway_ip]}
+    {%- for network in networks %}
+      {%- if network.enabled|default(true) and network.name in role.networks|default([]) %}
+        {%- if role.networks is mapping %}
+          {%- set _role_net_subnet = role.networks[network.name]['subnet'] %}
+        {%- else %}
+          {%- set _role_net_subnet = network.name_lower + '_subnet' %}
+        {%- endif %}
+              - {get_attr: [Networks, net_attributes_map, {{network.name_lower}}, subnets, {{ _role_net_subnet }}, gateway_ip]}
+      {%- endif %}
+    {%- endfor %}
+{%- endfor %}
       PingTestIpsMap:
 {%- for role in roles %}
         {{role.name}}:
@@ -1282,11 +1232,7 @@ resources:
 {%- for network in networks if network.enabled|default(true) %}
         - {{ network.name }}
 {%- endfor %}
-      NetVipMap:
-        map_merge:
-          - {get_attr: [VipMap, net_ip_map]}
-          - redis: {get_attr: [RedisVirtualIP, ip_address]}
-          - ovn_dbs: {get_attr: [OVNDBsVirtualIP, ip_address]}
+      NetVipMap: {get_attr: [VipMap, net_ip_map]}
       CloudNames: {get_attr: [CloudNames, value]}
       UndercloudHostsEntries: {get_param: UndercloudHostsEntries}
       ExtraHostsEntries: {get_param: ExtraHostFileEntries}
@@ -1300,6 +1246,7 @@ resources:
 {% for role in roles %}
           - get_attr: [{{role.name}}ServiceChainRoleData, value, keystone_resources]
 {% endfor %}
+      NetCidrMap: {get_attr: [NetCidrMapValue, value]}
 
 outputs:
   ManagedEndpoints:
@@ -1364,9 +1311,11 @@ outputs:
           max_fail_percentage: {get_param: {{role.name}}MaxFailPercentage}
           neutron_physical_bridge_name: {get_param: NeutronPhysicalBridge}
           neutron_public_interface_name: {get_param: NeutronPublicInterface}
-          network_deployment_actions: {get_attr: [{{role.name}}NetworkDeploymentActionsValue, value]}
+          network_config_update: {get_param: {{role.name}}NetworkConfigUpdate}
           tripleo_network_config_os_net_config_mappings: {get_param: NetConfigDataLookup}
           deployed_server_port_map: {get_param: DeployedServerPortMap}
+          tripleo_network_config_override: {get_param: {{role.name}}NetConfigOverride}
+          tripleo_stack_name: {get_param: RootStackName}
 {%- if role.name == 'ComputeOvsDpdk' %}
           num_dpdk_interface_rx_queues: {get_param: NumDpdkInterfaceRxQueues}
 {%- endif %}
@@ -1386,11 +1335,7 @@ outputs:
 {%- endfor %}
   VipMap:
     description: Mapping of each network to VIP addresses. Also includes the Redis and OVN DBs VIPs.
-    value:
-      map_merge:
-        - {get_attr: [VipMap, net_ip_map]}
-        - redis: {get_attr: [RedisVirtualIP, ip_address]}
-        - ovn_dbs: {get_attr: [OVNDBsVirtualIP, ip_address]}
+    value: {get_attr: [VipMap, net_ip_map]}
   ServerIdData:
     description: Mapping of each role to a list of nova server IDs and the bootstrap ID
     value: {get_attr: [ServerIdMap, value]}
@@ -1412,3 +1357,8 @@ outputs:
   AnsibleHostVarsMap:
     description: Map of Ansible Host variables per role
     value: {get_attr: [AnsibleHostVars, value]}
+  TripleoHeatTemplatesJinja2RenderingDataSources:
+    description: The role_data and the network_data used when rendering the THT Jinja2 templates
+    value:
+      roles_data: {{ roles }}
+      networks_data: {{ networks }}

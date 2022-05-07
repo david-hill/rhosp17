@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Ceilometer service configured with Puppet
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -55,11 +52,9 @@ parameters:
     description: Set to True to enable debugging on all services.
     type: boolean
   CeilometerDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging Ceilometer services.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   KeystoneRegion:
     type: string
     default: 'regionOne'
@@ -73,9 +68,17 @@ parameters:
     type: string
     hidden: true
   NotificationDriver:
-    type: string
+    type: comma_delimited_list
     default: 'noop'
     description: Driver or drivers to handle sending notifications.
+  MemcachedTLS:
+    default: false
+    description: Set to True to enable TLS on Memcached service.
+                 Because not all services support Memcached TLS, during the
+                 migration period, Memcached will listen on 2 ports - on the
+                 port set with MemcachedPort parameter (above) and on 11211,
+                 without TLS.
+    type: boolean
   GnocchiArchivePolicy:
     default: 'ceilometer-low-rate'
     type: string
@@ -91,10 +94,6 @@ parameter_groups:
   parameters:
   - GnocchiArchivePolicy
 
-conditions:
-  service_debug_unset: {equals : [{get_param: CeilometerDebug}, '']}
-  ceilometer_qdr_publish: {equals: [{get_param: CeilometerQdrPublish}, true]}
-
 outputs:
   role_data:
     description: Role data for the Ceilometer role.
@@ -104,17 +103,17 @@ outputs:
         map_merge:
           - ceilometer::logging::debug:
               if:
-              - service_debug_unset
-              - {get_param: Debug }
               - {get_param: CeilometerDebug }
-            ceilometer::agent::auth::auth_password: {get_param: CeilometerPassword}
-            ceilometer::agent::auth::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
+              - true
+              - {get_param: Debug }
             ceilometer::agent::polling::manage_polling: {get_param: ManagePolling}
-            ceilometer::agent::auth::auth_region: {get_param: KeystoneRegion}
-            ceilometer::agent::auth::auth_tenant_name: 'service'
-            ceilometer::agent::auth::auth_user_domain_name: 'Default'
-            ceilometer::agent::auth::auth_project_domain_name: 'Default'
-            ceilometer::agent::auth::auth_endpoint_type: 'internalURL'
+            ceilometer::agent::service_credentials::password: {get_param: CeilometerPassword}
+            ceilometer::agent::service_credentials::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
+            ceilometer::agent::service_credentials::region_name: {get_param: KeystoneRegion}
+            ceilometer::agent::service_credentials::project_name: 'service'
+            ceilometer::agent::service_credentials::user_domain_name: 'Default'
+            ceilometer::agent::service_credentials::auth_project_domain_name: 'Default'
+            ceilometer::agent::service_credentials::interface: 'internalURL'
             ceilometer::notification_driver: {get_param: NotificationDriver}
             ceilometer::amqp_rpc_address_prefix: {get_param: AmqpRpcAddressPrefix}
             ceilometer::amqp_notify_address_prefix: {get_param: AmqpNotifyAddressPrefix}
@@ -122,6 +121,10 @@ outputs:
             ceilometer::snmpd_readonly_username: {get_param: SnmpdReadonlyUserName}
             ceilometer::snmpd_readonly_user_password: {get_param: SnmpdReadonlyUserPassword}
             ceilometer::host: "%{hiera('fqdn_canonical')}"
+          - if:
+            - {get_param: MemcachedTLS}
+            - ceilometer::cache_backend: 'dogpile.cache.pymemcache'
+              ceilometer::cache_tls_enabled: true
       service_config_settings:
         keystone:
           # Enable default notification queue

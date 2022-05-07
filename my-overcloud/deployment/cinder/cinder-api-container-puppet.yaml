@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Cinder API service
@@ -30,9 +30,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -54,6 +51,10 @@ parameters:
     default: tripleo
     description: The name of Cinder's default volume type.
     type: string
+    constraints:
+    - allowed_pattern: ".*\\S.*"
+      description: >
+        The default volume type name cannot be empty.
   CinderEnableDBPurge:
     default: true
     description: |
@@ -80,21 +81,32 @@ parameters:
       e.g. { cinder-context_is_admin: { key: context_is_admin, value: 'role:admin' } }
     default: {}
     type: json
+  CinderApiWsgiTimeout:
+    default: 60
+    description: The number of seconds until a Cinder API WSGI connection times out.
+    type: number
   NotificationDriver:
-    type: string
+    type: comma_delimited_list
     default: 'noop'
     description: Driver or drivers to handle sending notifications.
   RootStackName:
     description: The name of the stack/plan.
     type: string
+  MemcacheUseAdvancedPool:
+    type: boolean
+    description: |
+      Use the advanced (eventlet safe) memcached client pool.
+    default: true
+  AuthCloudName:
+    description: Entry in clouds.yaml to use for authentication
+    type: string
+    default: ""
 
 conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  cinder_workers_zero: {equals : [{get_param: CinderWorkers}, 0]}
+  auth_cloud_name_set:
+    not: {equals: [{get_param: AuthCloudName}, ""]}
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -107,7 +119,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -119,7 +130,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -143,19 +153,6 @@ outputs:
               roles:
                 - admin
                 - service
-        cinderv2:
-          endpoints:
-            public: {get_param: [EndpointMap, CinderV2Public, uri]}
-            internal: {get_param: [EndpointMap, CinderV2Internal, uri]}
-            admin: {get_param: [EndpointMap, CinderV2Admin, uri]}
-          users:
-            cinderv2:
-              password: {get_param: CinderPassword}
-              roles:
-                - admin
-                - service
-          region: {get_param: KeystoneRegion}
-          service: 'volumev2'
         cinderv3:
           endpoints:
             public: {get_param: [EndpointMap, CinderV3Public, uri]}
@@ -175,7 +172,7 @@ outputs:
           - get_attr: [CinderBase, role_data, config_settings]
           - get_attr: [ApacheServiceBase, role_data, config_settings]
           - keystone_resources_managed: false
-          - cinder::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+          - cinder::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix]}
             cinder::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             cinder::keystone::authtoken::password: {get_param: CinderPassword}
             cinder::keystone::authtoken::project_name: 'service'
@@ -183,12 +180,12 @@ outputs:
             cinder::keystone::authtoken::project_domain_name: 'Default'
             cinder::keystone::authtoken::region_name: {get_param: KeystoneRegion}
             cinder::keystone::authtoken::interface: 'internal'
+            cinder::keystone::authtoken::memcache_use_advanced_pool: {get_param: MemcacheUseAdvancedPool}
             cinder::policy::policies: {get_param: CinderApiPolicies}
             cinder::notification_driver: {get_param: NotificationDriver}
             cinder::api::default_volume_type: {get_param: CinderDefaultVolumeType}
             cinder::api::enable_proxy_headers_parsing: true
 
-            cinder::api::nova_catalog_info: 'compute:nova:internalURL'
             tripleo::profile::base::cinder::cinder_enable_db_purge: {get_param: CinderEnableDBPurge}
             cinder::api::bind_host:
               str_replace:
@@ -209,36 +206,32 @@ outputs:
                   "%{hiera('$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, CinderApiNetwork]}
-          -
             cinder::wsgi::apache::servername:
               str_replace:
                 template:
                   "%{hiera('fqdn_$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, CinderApiNetwork]}
-          -
-            if:
-            - cinder_workers_zero
-            - {}
-            - cinder::wsgi::apache::workers: {get_param: CinderWorkers}
+            cinder::wsgi::apache::vhost_custom_fragment:
+              str_replace:
+                template:
+                  "Timeout TIMEOUT"
+                params:
+                  TIMEOUT: {get_param: CinderApiWsgiTimeout}
+            cinder::wsgi::apache::workers: {get_param: CinderWorkers}
       service_config_settings:
-        map_merge:
-          - get_attr: [CinderBase, role_data, service_config_settings]
-          - rsyslog:
-              tripleo_logging_sources_cinder_api:
-                - {get_param: CinderApiLoggingSource}
+        rsyslog:
+          tripleo_logging_sources_cinder_api:
+            - {get_param: CinderApiLoggingSource}
         mysql:
           cinder::db::mysql::password: {get_param: CinderPassword}
           cinder::db::mysql::user: cinder
-          cinder::db::mysql::host: {get_param: [EndpointMap, MysqlInternal, host_nobrackets]}
+          cinder::db::mysql::host: '%'
           cinder::db::mysql::dbname: cinder
-          cinder::db::mysql::allowed_hosts:
-            - '%'
-            - "%{hiera('mysql_bind_host')}"
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: cinder
-        puppet_tags: cinder_config,cinder_type,file,concat,file_line
+        puppet_tags: cinder_config,file,concat,file_line,cinder_api_paste_ini
         step_config:
           list_join:
             - "\n"
@@ -248,16 +241,13 @@ outputs:
       kolla_config:
         /var/lib/kolla/config_files/cinder_api.json:
           command: /usr/sbin/httpd -DFOREGROUND
-          config_files:
+          config_files: &cinder_api_config_files
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
               dest: "/etc/httpd/conf.modules.d"
-              # TODO(emilien) remove optional flag once we get a promotion
-              # https://launchpad.net/bugs/1884115
-              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -269,7 +259,7 @@ outputs:
               merge: true
               preserve_properties: true
               optional: true
-          permissions:
+          permissions: &cinder_api_permissions
             - path: /var/log/cinder
               owner: cinder:cinder
               recurse: true
@@ -277,6 +267,10 @@ outputs:
               owner: cinder:cinder
             - path: /etc/pki/tls/private/etcd.key
               owner: cinder:cinder
+        /var/lib/kolla/config_files/cinder_api_db_sync.json:
+          command: "/usr/bin/bootstrap_host_exec cinder_api su cinder -s /bin/bash -c 'cinder-manage db sync --bump-versions'"
+          config_files: *cinder_api_config_files
+          permissions: *cinder_api_permissions
         /var/lib/kolla/config_files/cinder_api_cron.json:
           command: /usr/sbin/crond -n
           config_files:
@@ -309,16 +303,15 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/config-data/cinder/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/cinder/etc/cinder/:/etc/cinder/:ro
+                - - /var/lib/kolla/config_files/cinder_api_db_sync.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/cinder:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/cinder:/var/log/cinder:z
-                  - /var/log/containers/httpd/cinder-api:/var/log/httpd:z
-            command:
-              - '/usr/bin/bootstrap_host_exec'
-              - 'cinder_api'
-              - "su cinder -s /bin/bash -c 'cinder-manage db sync --bump-versions'"
+                - if:
+                    - {get_param: EnableInternalTLS}
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
             environment:
+              KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           cinder_api:
@@ -333,16 +326,14 @@ outputs:
               test: /openstack/healthcheck
             volumes:
               list_concat:
-                - {get_attr: [CinderCommon, cinder_common_volumes]}
-                -
-                  - /var/lib/kolla/config_files/cinder_api.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/log/containers/httpd/cinder-api:/var/log/httpd:z
+                - {get_attr: [ContainersCommon, volumes]}
+                - - /var/lib/kolla/config_files/cinder_api.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/cinder:/var/lib/kolla/config_files/src:ro
+                  - /var/log/containers/cinder:/var/log/cinder:z
                 - if:
-                    - internal_tls_enabled
-                    -
-                      - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - {get_param: EnableInternalTLS}
+                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
                       - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                    - []
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
           cinder_api_cron:
@@ -363,20 +354,10 @@ outputs:
                   - /var/log/containers/httpd/cinder-api:/var/log/httpd:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
-      container_puppet_tasks:
-        # Create the default volume type after the cinder-api service is
-        # running. The puppet code will ensure this is only done once, on
-        # the bootstrap node.
-        step_4:
-          config_volume: 'cinder_init_tasks'
-          puppet_tags: cinder_config,cinder_type,file,concat,file_line
-          step_config: 'include tripleo::profile::base::cinder::api'
-          config_image: *cinder_api_image
-          volumes:
-            - /var/lib/config-data/cinder/etc/cinder/:/etc/cinder/:ro
-
       metadata_settings:
         get_attr: [ApacheServiceBase, role_data, metadata_settings]
+      deploy_steps_tasks:
+        get_attr: [ApacheServiceBase, role_data, deploy_steps_tasks]
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -417,25 +398,51 @@ outputs:
       external_deploy_tasks:
         - name: Clean up legacy Cinder keystone catalog entries
           become: true
-          os_keystone_service:
-            cloud: {get_param: RootStackName}
-            name: cinderv3
-            service_type: volume
+          openstack.cloud.catalog_service:
+            cloud:
+              if:
+                - auth_cloud_name_set
+                - {get_param: AuthCloudName}
+                - {get_param: RootStackName}
+            name: "{{ item.service_name }}"
+            service_type: "{{ item.service_type }}"
             state: absent
+          loop:
+            - {service_name: cinderv2, service_type: volumev2}
+            # The following cinderv3/volume entry removes a legacy workaround
+            # unrelated to cinder's v3 API service (cinderv3/volumev3). See
+            # Ic0eb72f78e2a19e2f40ab12631a872d828bab46a for details.
+            - {service_name: cinderv3, service_type: volume}
+          loop_control:
+            index_var: cinder_api_service
           when:
             - step|int == 4
-        - name: Manage Cinder Volume Type
+        - name: Manage Cinder's default volume type
           become: true
           vars:
             default_volume_type: {get_param: CinderDefaultVolumeType}
           environment:
-            OS_CLOUD: {get_param: RootStackName}
+            OS_CLOUD:
+              if:
+                - auth_cloud_name_set
+                - {get_param: AuthCloudName}
+                - {get_param: RootStackName}
           when:
             - step|int == 5
             - not ansible_check_mode|bool
           shell: |
             if ! openstack volume type show "{{ default_volume_type }}"; then
                 openstack volume type create --public "{{ default_volume_type }}"
+            fi
+            eval $(openstack volume type show __DEFAULT__ -f shell -c id -c description)
+            if [ -n "$id" ]; then
+                vols=$(openstack volume list -f value -c ID)
+                tripleo_descr="For internal use, '{{ default_volume_type }}' is the default volume type"
+                if [ -z "$vols" ]; then
+                    openstack volume type delete $id
+                elif [ "$description" != "$tripleo_descr" ]; then
+                    openstack volume type set $id --description "$tripleo_descr"
+                fi
             fi
           args:
             executable: /bin/bash

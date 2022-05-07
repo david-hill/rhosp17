@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Nova Compute service
@@ -29,9 +29,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -57,6 +54,28 @@ parameters:
       description: >
         The Ceph cluster name must be at least 1 character and contain only
         letters and numbers.
+  CephConfigPath:
+    type: string
+    default: "/var/lib/tripleo-config/ceph"
+    description: |
+      The path where the Ceph Cluster config files are stored on the host.
+  CinderRbdMultiConfig:
+    type: json
+    default: {}
+    description: |
+      Dictionary of settings when configuring multiple RBD backends. The
+      hash key is the backend name, and the value is a dictionary of parameter
+      values unique to that backend. The following parameters are required,
+      and must match the corresponding value defined in CephExternalMultiConfig.
+        CephClusterName (must match the CephExternalMultiConfig entry's 'cluster')
+        CephClusterFSID (must match the CephExternalMultiConfig entry's 'fsid')
+      The following parameters are optional, and override the corresponding
+      parameter's default value.
+        CephClientUserName
+        CinderRbdPoolName
+        CinderRbdExtraPools
+        CinderRbdAvailabilityZone
+        CinderRbdFlattenVolumeFromSnapshot
   NovaComputeOptVolumes:
     default: []
     description: list of optional volumes to be mounted
@@ -69,6 +88,14 @@ parameters:
     type: json
     tags:
       - role_specific
+  NovaComputeStartupDelay:
+    default: 0
+    description: Delays the startup of nova-compute service after compute node is
+                 booted. This is to give a chance to ceph to get back healthy
+                 before booting instances after and overcloud reboot.
+    type: number
+    constraints:
+    - range: { min: 0, max: 600 }
   EnableInstanceHA:
     default: false
     description: Whether to enable an Instance Ha configurarion or not.
@@ -94,6 +121,12 @@ parameters:
     default: false
     description: Whether to enable or not the NFS backend for Cinder
     type: boolean
+  NovaMkisofsCmd:
+    default: 'mkisofs'
+    description: Name or path of the tool used for ISO image creation.
+    type: string
+    tags:
+      - role_specific
   NovaNfsEnabled:
     default: false
     description: Whether to enable or not the NFS backend for Nova
@@ -113,12 +146,10 @@ parameters:
     tags:
       - role_specific
   NovaNfsVersion:
-    default: '4'
+    default: '4.2'
     description: >
       NFS version used for nova storage (when NovaNfsEnabled is true). Since
       NFSv3 does not support full locking a NFSv4 version need to be used.
-      To not break current installations the default is the previous hard
-      coded version 4.
     type: string
     constraints:
       - allowed_pattern: "^4.?[0-9]?"
@@ -132,6 +163,107 @@ parameters:
     default: false
     description: Whether to enable the Rbd backend for Nova ephemeral storage.
     type: boolean
+    tags:
+      - role_specific
+  NovaComputeForceRawImages:
+    default: true
+    description: |
+      Set to "True" to convert non-raw cached base images to raw format.
+      Set to "False" if you have a system with slow I/O or low available space,
+      trading the higher CPU requirements of compression for that of minimized input
+      bandwidth.
+      Notes::
+      - The Compute service removes any compression from the base image during
+        compression, to avoid CPU bottlenecks. Converted images cannot have backing
+        files, which might be a security issue.
+      - The raw image format uses more space than other image formats, for example,
+        qcow2.
+        Raw base images are always used with libvirt_images_type=lvm.
+    type: boolean
+    tags:
+      - role_specific
+  NovaComputeUseCowImages:
+    default: true
+    description: |
+      Set to "True" to use CoW (Copy on Write) images in cqow2 format for libvirt
+      instance disks. With CoW, depending on the backing store and host caching,
+      there might be better concurrency achieved by having each instance operate
+      on its own copy.
+      Set to "False" to use the raw format. Raw format uses more space for common
+      parts of the disk image.
+    type: boolean
+    tags:
+      - role_specific
+  NovaComputeLibvirtPreAllocateImages:
+    default: 'none'
+    description: |
+      Specifies the preallocation mode for libvirt instance disks.
+      Set to one of the following valid values::
+      - none - No storage is provisioned at instance start.
+      - space - Storage is fully allocated at instance start using fallocate,
+                which can help with both space guarantees and I/O performance.
+
+      Even when not using CoW instance disks, the copy each instance gets is sparse
+      and so the instance might fail unexpectedly at run time with ENOSPC. By
+      running fallocate(1) on the instance disk images, the Compute service
+      immediately and efficiently allocates the space for them in the file system,
+      if supported. Run time performance should also be improved because the file
+      system does not have to dynamically allocate blocks at run time, which reduces
+      CPU overhead and file fragmentation.
+    type: string
+    constraints:
+      - allowed_values: [ 'none', 'space']
+    tags:
+      - role_specific
+  NovaComputeImageCacheManagerInterval:
+    default: 2400
+    description: |
+      Specifies the number of seconds to wait between runs of the image cache
+      manager, which impacts base image caching on Compute nodes. This period
+      is used in the auto removal of unused cached images configured with
+      remove_unused_base_images and remove_unused_original_minimum_age_seconds.
+
+      Set to "0" to run at the default interval of 60 seconds (not recommended)
+    type: number
+    constraints:
+      - range: { min: -1}
+    tags:
+      - role_specific
+  NovaComputeImageCacheRemoveUnusedBaseImages:
+    default: true
+    description: |
+      Set to "True" to automatically remove unused base images from the cache
+      at intervals configured by using image_cache_manager_interval. Images
+      are defined as unused if they have not been accessed during the time
+      specified by using remove_unused_original_minimum_age_seconds.
+    type: boolean
+    tags:
+      - role_specific
+  NovaComputeImageCacheRemoveUnusedResizedMinimumAge:
+    default: 3600
+    description: |
+      Specifies the minimum age that an unused resized base image must be to
+      be removed from the cache, in seconds. Unused unresized base images
+      younger than this will not be removed.
+    type: number
+    constraints:
+      - range: { min: 1}
+    tags:
+      - role_specific
+  NovaComputeImageCachePrecacheConcurrency:
+    default: 1
+    description: |
+      Maximum number of Compute nodes to trigger image precaching in parallel.
+      When an image precache request is made, Compute nodes are contacted {by
+      who/which service} to initiate the download.
+
+      Higher numbers will cause more computes to work in parallel and may result
+      in reduced time to complete the operation, but may also DDoS the image
+      service. Lower numbers will result in more sequential operation, lower
+      image service load, but likely longer runtime to completion.
+    type: number
+    constraints:
+      - range: { min: 1}
     tags:
       - role_specific
   NovaPCIPassthrough:
@@ -304,7 +436,7 @@ parameters:
   NovaHWMachineType:
     description: >
       To specify a default machine type per host architecture.
-    default: 'x86_64=pc-i440fx-rhel7.6.0,aarch64=virt-rhel7.6.0,ppc64=pseries-rhel7.6.0,ppc64le=pseries-rhel7.6.0'
+    default: 'x86_64=q35'
     type: string
     tags:
       - role_specific
@@ -360,14 +492,30 @@ parameters:
     description: Whether to wait for `network-vif-plugged` events before starting guest transfer.
     default: true
     type: boolean
+  NovaLiveMigrationPermitPostCopy:
+    description: >
+      If "True" activates the instance on the destination node before migration is complete,
+      and to set an upper bound on the memory that needs to be transferred. Post copy
+      gets enabled per default if the compute roles is not a realtime role or disabled
+      by this parameter.
+    default: true
+    type: boolean
+    tags:
+      - role_specific
+  NovaLiveMigrationPermitAutoConverge:
+    description: >
+        Defaults to "True" to slow down the instance CPU until the memory copy process is faster than
+        the instance's memory writes when the migration performance is slow and might not complete.
+        Auto converge will only be used if this flag is set to True and post copy is not permitted
+        or post copy is unavailable due to the version of libvirt and QEMU.
+    default: true
+    type: boolean
+    tags:
+      - role_specific
   MultipathdEnable:
     default: false
     description: Whether to enable the multipath daemon
     type: boolean
-  NovaPassword:
-    description: The password for the nova service and db account
-    type: string
-    hidden: true
   NovaCPUAllocationRatio:
     type: number
     description: Virtual CPU to physical CPU allocation ratio.
@@ -467,7 +615,7 @@ parameters:
     description: >
       The libvirt CPU mode to configure. Defaults to 'host-model' if virt_type is
       set to kvm, otherwise defaults to 'none'
-    default: 'none'
+    default: 'host-model'
     constraints:
       - allowed_values:
         - custom
@@ -507,6 +655,143 @@ parameters:
       ownership and selinux context.
     default:
       - 'triliovault-mounts'
+  NovaImageTypeExcludeList:
+    type: comma_delimited_list
+    description: >
+      List of image formats that should not be advertised as supported by the compute
+      service.
+    default: []
+    tags:
+      - role_specific
+  NovaLibvirtMaxQueues:
+    type: number
+    description: >
+      Add parameter to configure the libvirt max_queues. The maximum number
+      of virtio queue pairs that can be enabled when creating a multiqueue guest.
+      The number of virtio queues allocated will be the lesser of the CPUs
+      requested by the guest and the max value defined.
+      Default 0 corresponds to not set
+    default: 0
+    tags:
+      - role_specific
+  GlanceRbdPoolName:
+    default: images
+    type: string
+  GlanceMultistoreConfig:
+    type: json
+    default: {}
+    description: |
+      Dictionary of settings when configuring additional glance backends. The
+      hash key is the backend ID, and the value is a dictionary of parameter
+      values unique to that backend. Multiple rbd and cinder backends are allowed, but
+      file and swift backends are limited to one each. Example:
+        # Default glance store is rbd.
+        GlanceBackend: rbd
+        GlanceStoreDescription: 'Default rbd store'
+        # GlanceMultistoreConfig specifies a second rbd backend, plus a cinder
+        # backend.
+        GlanceMultistoreConfig:
+          rbd2_store:
+            GlanceBackend: rbd
+            GlanceStoreDescription: 'Second rbd store'
+            CephClusterName: ceph2
+            # Override CephClientUserName if this cluster uses a different
+            # client name.
+            CephClientUserName: client2
+          cinder1_store:
+            GlanceBackend: cinder
+            GlanceCinderVolumeType: 'volume-type-1'
+            GlanceStoreDescription: 'First cinder store'
+          cinder2_store:
+            GlanceBackend: cinder
+            GlanceCinderVolumeType: 'volume-type-2'
+            GlanceStoreDescription: 'Seconde cinder store'
+  NovaGlanceEnableRbdDownload:
+    type: boolean
+    description: >
+      Enable download of Glance images directly via RBD.
+    default: false
+    tags:
+      - role_specific
+  NovaGlanceRbdDownloadMultistoreID:
+    type: string
+    description: >
+      The hash key, which is the backend ID, of the GlanceMultistoreConfig to
+      be used for the role where NovaGlanceEnableRbdDownload is enabled and
+      defaults should be overridden. If CephClientUserName or GlanceRbdPoolName
+      are not set in the GlanceMultistoreConfig, the global values of those
+      parameters will be used.
+    default: ''
+    tags:
+      - role_specific
+  GlanceBackendID:
+    type: string
+    default: 'default_backend'
+    description: The default backend's identifier.
+    constraints:
+    - allowed_pattern: "[a-zA-Z0-9_-]+"
+  NovaGlanceRbdCopyPollInterval:
+    type: number
+    description: >
+      The interval in seconds with which to poll Glance after asking for it
+      to copy an image to the local rbd store.
+    default: 15
+    tags:
+      - role_specific
+  NovaGlanceRbdCopyTimeout:
+    type: number
+    description: >
+      The overall maximum time we will wait for Glance to complete an image
+      copy to our local rbd store.
+    default: 600
+    tags:
+      - role_specific
+  CustomProviderInventories:
+    description: |
+      Array of hashes describing the custom providers for the compute role.
+      Format:
+      name/uuid - Resource providers to target can be identified by either
+      UUID or name. In addition, the value $COMPUTE_NODE can be used in
+      the UUID field to identify all nodes managed by the service.
+      Exactly one of uuid or name is mandatory. If neither uuid or name
+      is provided, the special uuid $COMPUTE_NODE gets set in the template.
+
+      inventories - (Optional) Hash of custom provider inventories. 'total' is
+      a mandatory property. Any other optional properties not populated will
+      be given a default value by placement. If overriding a pre-existing
+      provider values will not be preserved from the existing inventory.
+
+      traits - (Optional) Array of additional traits.
+      Example:
+      ComputeParameters:
+        CustomProviderInventories:
+          - uuid: $COMPUTE_NODE
+            inventories:
+              CUSTOM_EXAMPLE_RESOURCE_CLASS:
+                total: 100
+                reserved: 0
+                min_unit: 1
+                max_unit: 10
+                step_size: 1
+                allocation_ratio: 1.0
+              CUSTOM_ANOTHER_EXAMPLE_RESOURCE_CLASS:
+                total: 100
+            traits:
+              - CUSTOM_P_STATE_ENABLED
+              - CUSTOM_C_STATE_ENABLED
+    type: json
+    default: {}
+    tags:
+      - role_specific
+  EnableInternalTLS:
+    type: boolean
+    default: false
+  UseTLSTransportForLiveMigration:
+    type: boolean
+    default: true
+    description: If set to true and if EnableInternalTLS is enabled, it will
+                 set the libvirt URI's transport to tls and configure the
+                 relevant keys for libvirt.
 
   # DEPRECATED: the following options are deprecated and are currently maintained
   # for backwards compatibility. They will be removed in future release.
@@ -522,6 +807,21 @@ parameters:
     tags:
       - role_specific
 
+  RootStackName:
+    description: The name of the stack/plan.
+    type: string
+
+  RbdDiskCachemodes:
+    type: comma_delimited_list
+    default: ['network=writeback']
+    description: >
+      Disk cachemodes for RBD backend.
+
+  AuthCloudName:
+    description: Entry in clouds.yaml to use for authentication
+    type: string
+    default: ""
+
 parameter_groups:
 - label: deprecated
   description: |
@@ -532,22 +832,74 @@ parameter_groups:
   parameters:
   - NovaVcpuPinSet
 
+conditions:
+  auth_cloud_name_set:
+    not: {equals: [{get_param: AuthCloudName}, ""]}
+  compute_startup_delay:
+    and:
+      - not: {equals: [{get_param: NovaComputeStartupDelay}, 0]}
+      - not: {get_param: EnableInstanceHA}
+  use_tls_for_live_migration:
+    and:
+      - {get_param: EnableInternalTLS}
+      - {get_param: UseTLSTransportForLiveMigration}
+  enable_live_migration_tunnelled:
+    and:
+      - or:
+          - and:
+            - {get_param: NovaNfsEnabled}
+            - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, '']
+          - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, true]
+          - equals: [{get_param: [RoleParameters, NovaEnableRbdBackend]}, true]
+          - and:
+            - equals: [{get_param: [RoleParameters, NovaEnableRbdBackend]}, '']
+            - {get_param: NovaEnableRbdBackend}
+      - not: use_tls_for_live_migration
+  libvirt_file_backed_memory_enabled:
+    not:
+      or:
+      -  equals: [{get_param: NovaLibvirtFileBackedMemory}, '']
+      -  equals: [{get_param: [RoleParameters, NovaLibvirtFileBackedMemory]}, '']
+      -  equals: [{get_param: NovaLibvirtFileBackedMemory}, 0]
+      -  equals: [{get_param: [RoleParameters, NovaLibvirtFileBackedMemory]}, 0]
+  reserved_huge_pages_set:
+    not:
+      and:
+      - equals: [{get_param: [RoleParameters, NovaReservedHugePages]}, ""]
+      - equals: [{get_param: NovaReservedHugePages}, []]
+  is_realtime:
+    equals: [{get_param: [RoleParameters, TunedProfileName]}, 'realtime-virtual-host']
+  ovs_dpdk_socket_memory_not_set:
+    and:
+    - equals: [{get_param: [RoleParameters, OvsDpdkSocketMemory]}, ""]
+    - equals: [{get_param: OvsDpdkSocketMemory}, ""]
+  nova_libvirt_max_queues_set:
+    not:
+      or:
+      -  equals: [{get_param: NovaLibvirtMaxQueues}, 0]
+      -  equals: [{get_param: [RoleParameters, NovaLibvirtMaxQueues]}, 0]
+  glance_enable_rbd_download_set:
+    or:
+      - and:
+        - {get_param: NovaGlanceEnableRbdDownload}
+        - equals: [{get_param: [RoleParameters, NovaGlanceEnableRbdDownload]}, '']
+      - equals: [{get_param: [RoleParameters, NovaGlanceEnableRbdDownload]}, true]
+  nova_glance_rbd_download_multistore_id_set:
+    not:
+      and:
+      - equals: [{get_param: [RoleParameters, NovaGlanceRbdDownloadMultistoreID]}, '']
+      - equals: [{get_param: NovaGlanceRbdDownloadMultistoreID}, '']
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
-
-  MySQLClient:
-    type: ../../deployment/database/mysql-client.yaml
 
   NovaComputeCommon:
     type: ./nova-compute-common-container-puppet.yaml
     properties:
-      EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
+      EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -562,7 +914,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -589,6 +940,7 @@ resources:
               nova::compute::libvirt::file_backed_memory: NovaLibvirtFileBackedMemory
               nova::compute::libvirt::volume_use_multipath: NovaLibvirtVolumeUseMultipath
               nova::compute::libvirt::hw_machine_type: NovaHWMachineType
+              nova::compute::mkisofs_cmd: NovaMkisofsCmd
               compute_enable_ksm: NovaComputeEnableKsm
               nova::compute::rbd::libvirt_images_rbd_pool: NovaRbdPoolName
               tripleo::profile::base::nova::compute::nova_nfs_enabled: NovaNfsEnabled
@@ -606,7 +958,7 @@ resources:
               nova::compute::max_disk_devices_to_attach: NovaMaxDiskDevicesToAttach
               nova::compute::libvirt::pmem_namespaces: NovaPMEMMappings
               nova_pmem_namespaces: NovaPMEMNamespaces
-              nova::compute::libvirt::remove_unused_original_minimum_age_seconds: NovaImageCacheTTL
+              nova::compute::image_cache::remove_unused_original_minimum_age_seconds: NovaImageCacheTTL
               nova::compute::libvirt::swtpm_enabled: NovaEnableVTPM
               nova::compute::vgpu::vgpu_types_device_addresses_mapping: NovaVGPUTypesDeviceAddressesMapping
               compute_disable_irqbalance: NovaComputeDisableIrqBalance
@@ -616,6 +968,21 @@ resources:
               nova_compute_opt_volumes: NovaComputeOptVolumes
               nova_compute_opt_env_vars: NovaComputeOptEnvVars
               nova::workarounds::never_download_image_if_on_rbd: NovaDisableImageDownloadToRbd
+              nova::compute::image_type_exclude_list: NovaImageTypeExcludeList
+              nova_permit_post_copy: NovaLiveMigrationPermitPostCopy
+              nova_permit_auto_converge: NovaLiveMigrationPermitAutoConverge
+              nova_glance_enable_rbd_download: NovaGlanceEnableRbdDownload
+              nova_glance_rbd_download_multistore_id: NovaGlanceRbdDownloadMultistoreID
+              nova::compute::force_raw_images: NovaComputeForceRawImages
+              nova::compute::use_cow_images: NovaComputeUseCowImages
+              nova::compute::libvirt::preallocate_images: NovaComputeLibvirtPreAllocateImages
+              nova::compute::image_cache::manager_interval: NovaComputeImageCacheManagerInterval
+              nova::compute::image_cache::remove_unused_base_images: NovaComputeImageCacheRemoveUnusedBaseImages
+              nova::compute::image_cache::remove_unused_resized_minimum_age_seconds: NovaComputeImageCacheRemoveUnusedResizedMinimumAge
+              nova::compute::image_cache::precache_concurrency: NovaComputeImageCachePrecacheConcurrency
+              nova::compute::provider::custom_inventories: CustomProviderInventories
+              nova::compute::rbd::libvirt_images_rbd_glance_copy_poll_interval: NovaGlanceRbdCopyPollInterval
+              nova::compute::rbd::libvirt_images_rbd_glance_copy_timeout: NovaGlanceRbdCopyTimeout
             - values: {get_param: [RoleParameters]}
           - values:
               NovaVcpuPinSet: {get_param: NovaVcpuPinSet}
@@ -677,6 +1044,7 @@ resources:
               NovaHWMachineType: {get_param: NovaHWMachineType}
               NovaComputeEnableKsm: {get_param: NovaComputeEnableKsm}
               NovaRbdPoolName: {get_param: NovaRbdPoolName}
+              NovaMkisofsCmd: {get_param: NovaMkisofsCmd}
               NovaNfsEnabled: {get_param: NovaNfsEnabled}
               NovaNfsShare: {get_param: NovaNfsShare}
               NovaNfsOptions: {get_param: NovaNfsOptions}
@@ -700,49 +1068,22 @@ resources:
               NovaComputeOptVolumes: {get_param: NovaComputeOptVolumes}
               NovaComputeOptEnvVars: {get_param: NovaComputeOptEnvVars}
               NovaDisableImageDownloadToRbd: {get_param: NovaDisableImageDownloadToRbd}
-
-
-conditions:
-  enable_instance_ha: {equals: [{get_param: EnableInstanceHA}, true]}
-
-  enable_live_migration_tunnelled:
-    or:
-      - and:
-        - equals: [{get_param: NovaNfsEnabled}, true]
-        - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, '']
-      - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, true]
-      - equals: [{get_param: [RoleParameters, NovaEnableRbdBackend]}, true]
-      - and:
-        - equals: [{get_param: [RoleParameters, NovaEnableRbdBackend]}, '']
-        - equals: [{get_param: NovaEnableRbdBackend}, true]
-
-  libvirt_file_backed_memory_enabled:
-    not:
-      or:
-      -  equals: [{get_param: NovaLibvirtFileBackedMemory}, '']
-      -  equals: [{get_param: [RoleParameters, NovaLibvirtFileBackedMemory]}, '']
-      -  equals: [{get_param: NovaLibvirtFileBackedMemory}, 0]
-      -  equals: [{get_param: [RoleParameters, NovaLibvirtFileBackedMemory]}, 0]
-
-  is_not_additional_cell: {equals: [{get_param: NovaAdditionalCell}, false]}
-
-  nova_nfs_enabled:
-    or:
-      - and:
-        - equals: [{get_param: NovaNfsEnabled}, true]
-        - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, '']
-      - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, true]
-
-  reserved_huge_pages_set:
-    not:
-      and:
-      - equals: [{get_param: [RoleParameters, NovaReservedHugePages]}, ""]
-      - equals: [{get_param: NovaReservedHugePages}, []]
-
-  ovs_dpdk_socket_memory_not_set:
-    and:
-    - equals: [{get_param: [RoleParameters, OvsDpdkSocketMemory]}, ""]
-    - equals: [{get_param: OvsDpdkSocketMemory}, ""]
+              NovaImageTypeExcludeList: {get_param: NovaImageTypeExcludeList}
+              NovaLiveMigrationPermitPostCopy: {get_param: NovaLiveMigrationPermitPostCopy}
+              NovaLiveMigrationPermitAutoConverge: {get_param: NovaLiveMigrationPermitAutoConverge}
+              NovaLibvirtMaxQueues: {get_param: NovaLibvirtMaxQueues}
+              NovaGlanceEnableRbdDownload: {get_param: NovaGlanceEnableRbdDownload}
+              NovaGlanceRbdDownloadMultistoreID: {get_param: NovaGlanceRbdDownloadMultistoreID}
+              NovaComputeForceRawImages: {get_param: NovaComputeForceRawImages}
+              NovaComputeUseCowImages: {get_param: NovaComputeUseCowImages}
+              NovaComputeLibvirtPreAllocateImages: {get_param: NovaComputeLibvirtPreAllocateImages}
+              NovaComputeImageCacheManagerInterval: {get_param: NovaComputeImageCacheManagerInterval}
+              NovaComputeImageCacheRemoveUnusedBaseImages: {get_param: NovaComputeImageCacheRemoveUnusedBaseImages}
+              NovaComputeImageCacheRemoveUnusedResizedMinimumAge: {get_param: NovaComputeImageCacheRemoveUnusedResizedMinimumAge}
+              NovaComputeImageCachePrecacheConcurrency: {get_param: NovaComputeImageCachePrecacheConcurrency}
+              CustomProviderInventories: {get_param: CustomProviderInventories}
+              NovaGlanceRbdCopyPollInterval: {get_param: NovaGlanceRbdCopyPollInterval}
+              NovaGlanceRbdCopyTimeout: {get_param: NovaGlanceRbdCopyTimeout}
 
 outputs:
   role_data:
@@ -771,6 +1112,7 @@ outputs:
             tripleo::profile::base::nova::migration::client::nova_compute_enabled: true
             tripleo::profile::base::nova::migration::client::ssh_private_key: {get_param: [ MigrationSshKey, private_key ]}
             tripleo::profile::base::nova::migration::client::ssh_port: {get_param: MigrationSshPort}
+            nova::compute::rbd::libvirt_images_rbd_glance_store_name: {get_param: GlanceBackendID}
             nova::compute::rbd::libvirt_images_rbd_ceph_conf:
               list_join:
               - ''
@@ -785,14 +1127,7 @@ outputs:
                 - {get_param: CephClientUserName}
             tripleo::profile::base::nova::compute::cinder_nfs_backend: {get_param: CinderEnableNfsBackend}
             rbd_persistent_storage: {get_param: CinderEnableRbdBackend}
-            nova::keystone::authtoken::project_name: 'service'
-            nova::keystone::authtoken::user_domain_name: 'Default'
-            nova::keystone::authtoken::project_domain_name: 'Default'
-            nova::keystone::authtoken::password: {get_param: NovaPassword}
-            nova::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
-            nova::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-            nova::keystone::authtoken::region_name: {get_param: KeystoneRegion}
-            nova::keystone::authtoken::interface: 'internal'
+            rbd_disk_cachemodes: {get_param: RbdDiskCachemodes}
             nova::cinder::username: 'cinder'
             nova::cinder::auth_type: 'v3password'
             nova::cinder::project_name: 'service'
@@ -805,18 +1140,18 @@ outputs:
             nova::compute::instance_usage_audit_period: 'hour'
             nova::compute::consecutive_build_service_disable_threshold: {get_param: NovaAutoDisabling}
             nova::compute::live_migration_wait_for_vif_plug: {get_param: NovaLiveMigrationWaitForVIFPlug}
-            # TUNNELLED mode provides a security improvement for migration, but
-            # can't be used in combination with block migration. So we only enable it
-            # when shared storage is available (Ceph RDB is currently the only option).
-            # See https://bugzilla.redhat.com/show_bug.cgi?id=1301986#c12
-            # In future versions of QEMU (2.6, mostly), danpb's native
-            # encryption work will obsolete the need to use TUNNELLED transport
-            # mode.
-            nova::migration::live_migration_tunnelled:
+            nova::migration::libvirt::live_migration_permit_post_copy:
               if:
-              - enable_live_migration_tunnelled
-              - true
-              - false
+                - is_realtime
+                - false
+                - {get_attr: [RoleParametersValue, value, nova_permit_post_copy]}
+            nova::migration::libvirt::live_migration_permit_auto_converge:
+              if:
+                - is_realtime
+                - false
+                - {get_attr: [RoleParametersValue, value, nova_permit_auto_converge]}
+            # TUNNELLED mode is not compatible with post_copy.
+            nova::migration::libvirt::live_migration_tunnelled: false
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -828,7 +1163,7 @@ outputs:
                 template:
                   "%{hiera('$NETWORK')}"
                 params:
-                  $NETWORK: {get_param: [ServiceNetMap, NovaVncProxyNetwork]}
+                  $NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
             nova::compute::vncproxy_host: {get_param: [EndpointMap, NovaPublic, host_nobrackets]}
             nova::vncproxy::common::vncproxy_protocol: {get_param: [EndpointMap, NovaVNCProxyCellPublic, protocol]}
             nova::vncproxy::common::vncproxy_host: {get_param: [EndpointMap, NovaVNCProxyCellPublic, host_nobrackets]}
@@ -840,6 +1175,46 @@ outputs:
               - libvirt_file_backed_memory_enabled
               - '1.0'
               - {get_attr: [RoleParametersValue, value, 'nova::ram_allocation_ratio']}
+            nova::compute::libvirt::max_queues:
+              if:
+                - nova_libvirt_max_queues_set
+                - {get_attr: [RoleParametersValue, value, nova_libvirt_max_queues]}
+          - if:
+            - glance_enable_rbd_download_set
+            - nova::glance::enable_rbd_download: {get_attr: [RoleParametersValue, value, nova_glance_enable_rbd_download]}
+              nova::glance::rbd_user:
+                if:
+                - nova_glance_rbd_download_multistore_id_set
+                - yaql:
+                    expression: let(k => $.data.key, d => $.data.default_ceph_client_user_name) -> $.data.multistore.get($k).get("CephClientUserName", $d)
+                    data:
+                      key: {get_attr: [RoleParametersValue, value, nova_glance_rbd_download_multistore_id]}
+                      multistore: {get_param: GlanceMultistoreConfig}
+                      default_ceph_client_user_name: {get_param: CephClientUserName}
+                - {get_param: CephClientUserName}
+              nova::glance::rbd_pool:
+                if:
+                - nova_glance_rbd_download_multistore_id_set
+                - yaql:
+                    expression: let(k => $.data.key, d => $.data.default_glance_rbd_pool_name) -> $.data.multistore.get($k).get("GlanceRbdPoolName", $d)
+                    data:
+                      key: {get_attr: [RoleParametersValue, value, nova_glance_rbd_download_multistore_id]}
+                      multistore: {get_param: GlanceMultistoreConfig}
+                      default_glance_rbd_pool_name: {get_param: GlanceRbdPoolName}
+                - {get_param: GlanceRbdPoolName}
+              nova::glance::rbd_ceph_conf:
+                list_join:
+                - ''
+                - - '/etc/ceph/'
+                  - if:
+                    - nova_glance_rbd_download_multistore_id_set
+                    - yaql:
+                        expression: let(k => $.data.key) -> list(coalesce($.data.multistore, {}).get($k)).flatten().select($.get("CephClusterName"))
+                        data:
+                          key: {get_attr: [RoleParametersValue, value, nova_glance_rbd_download_multistore_id]}
+                          multistore: {get_param: GlanceMultistoreConfig}
+                    - {get_param: CephClusterName}
+                  - '.conf'
       service_config_settings:
         rsyslog:
           tripleo_logging_sources_nova_compute:
@@ -850,15 +1225,12 @@ outputs:
           collectd::plugin::virt::connection: 'qemu:///system'
       puppet_config:
         config_volume: nova_libvirt
-        puppet_tags: nova_config,nova_paste_api_ini
-        step_config:
-          list_join:
-            - "\n"
-            - - # TODO(emilien): figure how to deal with libvirt profile.
-                # We'll probably treat it like we do with Neutron plugins.
-                # Until then, just include it in the default nova-compute role.
-                include tripleo::profile::base::nova::compute::libvirt
-              - {get_attr: [MySQLClient, role_data, step_config]}
+        puppet_tags: nova_config
+        step_config: |
+          # TODO(emilien): figure how to deal with libvirt profile.
+          # We'll probably treat it like we do with Neutron plugins.
+          # Until then, just include it in the default nova-compute role.
+          include tripleo::profile::base::nova::compute::libvirt
         config_image: {get_param: ContainerNovaLibvirtConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/nova_compute.json:
@@ -866,7 +1238,12 @@ outputs:
             list_join:
             - ' '
             - - if:
-                - enable_instance_ha
+                - compute_startup_delay
+                - str_replace:
+                    template: '/var/lib/nova/delay-nova-compute --delay DELAY --nova-binary'
+                    params: { DELAY: {get_param: NovaComputeStartupDelay} }
+              - if:
+                - {get_param: EnableInstanceHA}
                 - /var/lib/nova/instanceha/check-run-nova-compute
                 - /usr/bin/nova-compute
               - get_attr: [NovaLogging, cmd_extra_args]
@@ -884,17 +1261,53 @@ outputs:
               merge: true
               preserve_properties: true
           permissions:
+            list_concat:
+              - - path: /var/log/nova
+                  owner: nova:nova
+                  recurse: true
+                - path:
+                    str_replace:
+                      template: /etc/ceph/CLUSTER.client.USER.keyring
+                      params:
+                        CLUSTER: {get_param: CephClusterName}
+                        USER: {get_param: CephClientUserName}
+                  owner: nova:nova
+                  perm: '0600'
+              - repeat:
+                  template:
+                    path: /etc/ceph/<%keyring%>
+                    owner: nova:nova
+                    perm: '0600'
+                  for_each:
+                    <%keyring%>:
+                      yaql:
+                        expression: let(u => $.data.user) -> $.data.multistore.values().where($.get("CephClusterName")).select("{0}.client.{1}.keyring".format($.CephClusterName, $.get("CephClientUserName", $u)    ))
+                        data:
+                          user: {get_param: CephClientUserName}
+                          multistore: {get_param: GlanceMultistoreConfig}
+              - repeat:
+                  template:
+                    path: /etc/ceph/<%keyring%>
+                    owner: nova:nova
+                    perm: '0600'
+                  for_each:
+                    <%keyring%>:
+                      yaql:
+                        expression: let(u => $.data.default_user) -> $.data.multiconfig.values().select("{0}.client.{1}.keyring".format($.CephClusterName, $.get("CephClientUserName", $u)))
+                        data:
+                          default_user: {get_param: CephClientUserName}
+                          multiconfig: {get_param: CinderRbdMultiConfig}
+        /var/lib/kolla/config_files/nova_compute_wait_for_compute_service.json:
+          command: "/container-config-scripts/pyshim.sh /container-config-scripts/nova_wait_for_compute_service.py"
+          config_files:
+            - source: "/var/lib/kolla/config_files/src/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
+          permissions:
             - path: /var/log/nova
               owner: nova:nova
               recurse: true
-            - path:
-                str_replace:
-                  template: /etc/ceph/CLUSTER.client.USER.keyring
-                  params:
-                    CLUSTER: {get_param: CephClusterName}
-                    USER: {get_param: CephClientUserName}
-              owner: nova:nova
-              perm: '0600'
       container_config_scripts:
         map_merge:
           - {get_attr: [ContainersCommon, container_config_scripts]}
@@ -907,13 +1320,14 @@ outputs:
             image: &nova_compute_image {get_param: ContainerNovaComputeImage}
             net: none
             user: root
-            security_opt: label=disable
+            security_opt:
+              - label=disable
             privileged: false
             detach: false
             volumes:
               - /var/lib/nova:/var/lib/nova:shared
               - /var/lib/_nova_secontext:/var/lib/_nova_secontext:shared,z
-              - /var/lib/container-config-scripts/:/container-config-scripts/:z
+              - /var/lib/container-config-scripts:/container-config-scripts:z
             command: "/container-config-scripts/pyshim.sh /container-config-scripts/nova_statedir_ownership.py"
             environment:
               # NOTE: this should force this container to re-run on each
@@ -947,12 +1361,15 @@ outputs:
                     - {get_attr: [ContainersCommon, volumes]}
                     - {get_attr: [NovaLogging, volumes]}
                     - {get_attr: [RoleParametersValue, value, nova_compute_opt_volumes]}
-                    -
-                      - /etc/ssh/ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
+                    - - /etc/ssh/ssh_known_hosts:/etc/ssh/ssh_known_hosts:ro
                       - /var/lib/kolla/config_files/nova_compute.json:/var/lib/kolla/config_files/config.json:ro
                       - /var/lib/config-data/puppet-generated/nova_libvirt:/var/lib/kolla/config_files/src:ro
-                      - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
-                      - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
+                      - /var/lib/config-data/puppet-generated/iscsid/etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
+                      - list_join:
+                        - ':'
+                        - - {get_param: CephConfigPath}
+                        - - '/var/lib/kolla/config_files/src-ceph'
+                        - - 'ro'
                       - /dev:/dev
                       - /lib/modules:/lib/modules:ro
                       - /run:/run
@@ -962,19 +1379,17 @@ outputs:
                       - /sys/bus/pci:/sys/bus/pci
                       - /boot:/boot:ro
                       - /var/lib/nova:/var/lib/nova:shared
-                    -
-                      if:
-                      - {equals: [{get_param: MultipathdEnable}, true]}
+                    - if:
+                      - {get_param: MultipathdEnable}
                       - - /etc/multipath:/etc/multipath:z
                         - /etc/multipath.conf:/etc/multipath.conf:ro
-                      - []
                 environment:
                   map_merge:
                     - {get_attr: [RoleParametersValue, value, nova_compute_opt_env_vars]}
                     - KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
-                    - LIBGUESTFS_BACKEND: libvirt:qemu:///system
+                    - LIBGUESTFS_BACKEND: direct
             - if:
-                - is_not_additional_cell
+                - {get_param: NovaAdditionalCell}
                 - nova_wait_for_compute_service:
                     start_order: 4
                     image: *nova_compute_image
@@ -984,19 +1399,18 @@ outputs:
                       list_concat:
                         - {get_attr: [ContainersCommon, volumes]}
                         -
-                          - /var/lib/config-data/nova_libvirt/etc/my.cnf.d/:/etc/my.cnf.d/:ro
-                          - /var/lib/config-data/nova_libvirt/etc/nova/:/etc/nova/:ro
+                          - /var/lib/kolla/config_files/nova_compute_wait_for_compute_service.json:/var/lib/kolla/config_files/config.json:ro
+                          - /var/lib/config-data/puppet-generated/nova_libvirt:/var/lib/kolla/config_files/src:ro
                           - /var/log/containers/nova:/var/log/nova
                           - /var/lib/container-config-scripts/:/container-config-scripts/
                     user: nova
-                    command: "/container-config-scripts/pyshim.sh /container-config-scripts/nova_wait_for_compute_service.py"
                     environment:
+                      KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
                       __OS_DEBUG:
                         yaql:
                           expression: str($.data.debug)
                           data:
                             debug: {get_attr: [NovaBase, role_data, config_settings, 'nova::logging::debug']}
-                - {}
       host_prep_tasks:
         list_concat:
         - {get_attr: [NovaLogging, host_prep_tasks]}
@@ -1060,11 +1474,18 @@ outputs:
 
                     [Install]
                     WantedBy=multi-user.target
+              - name: Making sure virt-guest-shutdown.target is present
+                copy:
+                  dest: /etc/systemd/system/virt-guest-shutdown.target
+                  content: |
+                    [Unit]
+                    Description=Libvirt guests shutdown
+                    Documentation=https://libvirt.org
               - name: libvirt-guests enable VM shutdown on compute reboot/shutdown
                 systemd:
                   name: libvirt-guests
-                  enabled: yes
-                  daemon_reload: yes
+                  enabled: true
+                  daemon_reload: true
           - name: install tripleo_nova_libvirt_guests systemd unit file (podman)
             when:
               - resume_guests_state_on_host_boot_enabled|bool
@@ -1078,6 +1499,7 @@ outputs:
                     Description=Suspend libvirt Guests in tripleo
                     Requires=virt-guest-shutdown.target
                     After=systemd-machined.service
+                    After=network-online.target
                     After=tripleo_nova_libvirt.service
                     Before=tripleo_nova_compute.service
                     Documentation=man:libvirtd(8)
@@ -1094,14 +1516,21 @@ outputs:
 
                     [Install]
                     WantedBy=multi-user.target
+              - name: Making sure virt-guest-shutdown.target is present
+                copy:
+                  dest: /etc/systemd/system/virt-guest-shutdown.target
+                  content: |
+                    [Unit]
+                    Description=Libvirt guests shutdown
+                    Documentation=https://libvirt.org
               - name: tripleo_nova_libvirt_guests enable VM shutdown on compute reboot/shutdown
                 systemd:
                   name: tripleo_nova_libvirt_guests
-                  enabled: yes
-                  daemon_reload: yes
+                  enabled: true
+                  daemon_reload: true
           - name: ensure ceph configurations exist
             file:
-              path: /etc/ceph
+              path: {get_param: CephConfigPath}
               state: directory
           - name: is Instance HA enabled
             set_fact:
@@ -1109,8 +1538,11 @@ outputs:
           - name: enable virt_sandbox_use_netlink for healthcheck
             seboolean:
               name: virt_sandbox_use_netlink
-              persistent: yes
-              state: yes
+              persistent: true
+              state: true
+            when:
+              - ansible_facts.selinux is defined
+              - ansible_facts.selinux.status == "enabled"
           - name: install Instance HA recovery script
             when: instance_ha_enabled|bool
             block:
@@ -1128,69 +1560,16 @@ outputs:
               register: iha_nodes
             - name: If instance HA is enabled on the node activate the evacuation completed check
               file: path=/var/lib/nova/instanceha/enabled state=touch
-              when: iha_nodes.stdout|lower is search('"'+ansible_hostname|lower+'"')
-          - name: is KSM enabled
+              when: iha_nodes.stdout|lower is search('"'+ansible_facts['hostname']|lower+'"')
+          - name: Do we prepend nova startup with a delay
             set_fact:
-              compute_ksm_enabled: {get_attr: [RoleParametersValue, value, compute_enable_ksm]}
-          - name: disable KSM on compute
-            when: not compute_ksm_enabled|bool
-            block:
-            - name: Populate service facts (ksm)
-              service_facts: # needed to make yaml happy
-            - name: disable KSM services
-              service:
-                name: "{{ item }}"
-                state: stopped
-                enabled: no
-              with_items:
-                - ksm.service
-                - ksmtuned.service
-              when: "'ksm.service' in ansible_facts.services"
-              register: ksmdisabled
-            # When KSM is disabled, any memory pages that were shared prior to
-            # deactivating KSM are still shared. To delete all of the PageKSM
-            # in the system, we use:
-            - name: delete PageKSM after disable ksm on compute
-              command: echo 2 >/sys/kernel/mm/ksm/run
-              when:
-                - "'ksm.service' in ansible_facts.services"
-                - ksmdisabled is changed
-          - name: enable KSM on compute
-            when: compute_ksm_enabled|bool
-            block:
-            - name: Populate service facts (ksm)
-              service_facts: # needed to make yaml happy
-            # mschuppert: we can remove the CentOS/RHEL split here when CentOS8/
-            # RHEL8 is available and we have the same package name providing the
-            # KSM services
-            - name: make sure package providing ksmtuned is installed (CentOS7)
-              package:
-                name: qemu-kvm-common-ev
-                state: present
-              when:
-                - ansible_distribution == 'CentOS'
-                - ansible_distribution_major_version == '7'
-            - name: make sure package providing ksmtuned is installed (RHEL7)
-              package:
-                name: qemu-kvm-common-rhev
-                state: present
-              when:
-                - ansible_distribution == 'RedHat'
-                - ansible_distribution_major_version == '7'
-            - name: make sure package providing ksmtuned is installed (RHEL8 or CentOS8)
-              package:
-                name: qemu-kvm-common
-                state: present
-              when:
-                - ansible_distribution_major_version == '8'
-            - name: enable ksmtunded
-              service:
-                name: "{{ item }}"
-                state: started
-                enabled: yes
-              with_items:
-                - ksm.service
-                - ksmtuned.service
+              nova_compute_delay: {get_param: NovaComputeStartupDelay}
+          - name: install nova-compute delay wrapper script
+            copy:
+              content: {get_file: ../../scripts/delay-nova-compute}
+              dest: /var/lib/nova/delay-nova-compute
+              mode: 0755
+            when: nova_compute_delay|int > 0
           - name: Is irqbalance enabled
             set_fact:
               compute_irqbalance_disabled: {get_attr: [RoleParametersValue, value, compute_disable_irqbalance]}
@@ -1202,7 +1581,7 @@ outputs:
               enabled: no
       deploy_steps_tasks:
         - name: validate nova-compute container state
-          podman_container_info:
+          containers.podman.podman_container_info:
             name: nova_compute
           register: nova_compute_infos
           failed_when:
@@ -1225,6 +1604,59 @@ outputs:
           when:
             - step|int == 1
             - tripleo_nvdimm_pmem_namespaces != ''
+        - name: enable/disable ksm
+          when:
+            - step|int == 1
+          block:
+          - name: is KSM enabled
+            set_fact:
+              compute_ksm_enabled: {get_attr: [RoleParametersValue, value, compute_enable_ksm]}
+          - name: disable KSM on compute
+            when: not compute_ksm_enabled|bool
+            block:
+            - name: Check for ksm
+              shell: systemctl is-active ksm.service || systemctl is-enabled ksm.service
+              become: true
+              failed_when: false
+              register: ksm_service_check
+            - name: disable KSM services
+              service:
+                name: "{{ item }}"
+                state: stopped
+                enabled: false
+              with_items:
+                - ksm.service
+                - ksmtuned.service
+              when:
+                - ksm_service_check.rc is defined
+                - ksm_service_check.rc == 0
+              register: ksmdisabled
+            # When KSM is disabled, any memory pages that were shared prior to
+            # deactivating KSM are still shared. To delete all of the PageKSM
+            # in the system, we use:
+            - name: delete PageKSM after disable ksm on compute
+              command: echo 2 >/sys/kernel/mm/ksm/run
+              when:
+                - ksm_service_check.rc is defined
+                - ksm_service_check.rc == 0
+                - ksmdisabled is changed
+          - name: enable KSM on compute
+            when: compute_ksm_enabled|bool
+            block:
+            - name: make sure package providing ksmtuned is installed (RHEL8 or CentOS8)
+              package:
+                name: qemu-kvm-common
+                state: present
+              when:
+                - ansible_facts['distribution_major_version'] is version('8', '==')
+            - name: enable ksmtunded
+              service:
+                name: "{{ item }}"
+                state: started
+                enabled: true
+              with_items:
+                - ksm.service
+                - ksmtuned.service
       external_post_deploy_tasks: {get_attr: [NovaComputeCommon, nova_compute_common_deploy_steps_tasks]}
       upgrade_tasks:
         - name: Remove openstack-nova-compute and python-nova package during upgrade
@@ -1249,36 +1681,34 @@ outputs:
             - step|int == 1
             - container_cli == 'podman'
           tags: down
+          become: true
           environment:
-            OS_USERNAME: admin
-            OS_USER_DOMAIN_NAME: "Default"
-            OS_PROJECT_DOMAIN_NAME: "Default"
-            OS_PROJECT_NAME: admin
-            OS_PASSWORD: { get_param: AdminPassword }
-            OS_AUTH_URL: { get_param: [EndpointMap, KeystoneV3Public, uri] }
-            OS_IDENTITY_API_VERSION: 3
-            OS_AUTH_TYPE: password
+            OS_CLOUD:
+              if:
+                - auth_cloud_name_set
+                - {get_param: AuthCloudName}
+                - {get_param: RootStackName}
           block:
             # Some tasks are running from the Undercloud which has
             # the OpenStack clients installed.
             - name: Get nova-compute service ID
               command: openstack compute service list --service nova-compute --column ID --column Host --format yaml
               register: nova_compute_service_result
-              delegate_to: localhost
-              check_mode: no
+              delegate_to: "{{ groups['Undercloud'] | first }}"
+              check_mode: false
               changed_when: false
             - name: is additional Cell?
               set_fact:
                 is_additional_cell: {get_param: NovaAdditionalCell}
             - name: Set fact for nova_compute services
               set_fact:
-                nova_compute_service: "{{ nova_compute_service_result.stdout | from_yaml | selectattr('Host', 'match', ansible_fqdn ~ '.*') | list }}"
-              delegate_to: localhost
-              check_mode: no
+                nova_compute_service: "{{ nova_compute_service_result.stdout | from_yaml | selectattr('Host', 'match', ansible_facts['fqdn'] ~ '.*') | list }}"
+              delegate_to: "{{ groups['Undercloud'] | first }}"
+              check_mode: false
             - name: Check search output
               fail:
                 msg: >-
-                  Found multiple `{{ ansible_fqdn }}`, which is unexpected.
+                  Found multiple `{{ ansible_facts['fqdn'] }}`, which is unexpected.
                   This means that the FQDN of the selected device to disable is
                   either wrong or is sharing a name with another host, which is
                   also wrong. Please correct this issue before continuing. Nova
@@ -1292,17 +1722,21 @@ outputs:
               block:
                 - name: Disable nova-compute service
                   command: openstack compute service set {{ nova_compute_service[0].Host }} nova-compute --disable
-                  delegate_to: localhost
-                  check_mode: no
+                  delegate_to: "{{ groups['Undercloud'] | first }}"
+                  check_mode: false
                   when:
                     - not is_additional_cell|bool
                 - name: Stop nova-compute container
                   service:
                     name: tripleo_nova_compute
                     state: stopped
-                    enabled: no
+                    enabled: false
                   become: true
+                  register: stop_nova_compute
+                  failed_when: "('msg' in stop_nova_compute and
+                                 'Could not find the requested service tripleo_nova_compute' not in stop_nova_compute.msg) or
+                                ('rc' in stop_nova_compute and stop_nova_compute.rc != 0)"
                 - name: Delete nova-compute service
                   command: openstack compute service delete {{ nova_compute_service[0].ID }}
-                  delegate_to: localhost
-                  check_mode: no
+                  delegate_to: "{{ groups['Undercloud'] | first }}"
+                  check_mode: false

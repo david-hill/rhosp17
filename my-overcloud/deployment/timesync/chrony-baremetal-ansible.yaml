@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Chrony time service deployment using ansible, this YAML file
@@ -16,9 +16,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -106,21 +103,26 @@ outputs:
           dport: 123
           proto: udp
       host_prep_tasks:
-        - name: Populate service facts (chrony)
-          service_facts: # needed to make yaml happy
+        - name: Check for NTP service
+          shell: systemctl is-active ntpd.service || systemctl is-enabled ntpd.service
+          failed_when: false
+          become: true
+          register: ntp_service_check
         - name: Disable NTP before configuring Chrony
           service:
               name: ntpd
               state: stopped
               enabled: no
-          when: "'ntpd.service' in ansible_facts.services"
+          when:
+            - ntp_service_check.rc is defined
+            - ntp_service_check.rc == 0
         - name: Install, Configure and Run Chrony
           include_role:
             name: chrony
-        - name: Ensure chrony has been restarted
-          meta: flush_handlers
-        - name: Ensure system is NTP time synced
+        - name: Force NTP sync
           command: chronyc makestep
+        - name: Ensure system is NTP time synced
+          command: chronyc waitsync 30
       ansible_group_vars:
         chrony_role_action: all
         chrony_ntp_servers: {get_param: NtpServer}

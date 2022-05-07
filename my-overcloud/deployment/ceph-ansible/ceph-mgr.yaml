@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Ceph Manager service.
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -49,15 +46,24 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  CephCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
-  dashboard_enabled: {equals: [{get_param: CephEnableDashboard}, true]}
   internal_tls_enabled:
     and:
-      - dashboard_enabled
-      - equals:
-          - get_param: EnableInternalTLS
-          - true
+      - {get_param: CephEnableDashboard}
+      - {get_param: EnableInternalTLS}
+  key_size_override_set:
+    not: {equals: [{get_param: CephCertificateKeySize}, '']}
 
 resources:
   CephBase:
@@ -65,7 +71,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -84,6 +89,11 @@ resources:
           dashboard_rgw_api_no_ssl_verify: false
           dashboard_port: {get_param: CephDashboardPort}
           dashboard_admin_user_ro: {get_param: CephDashboardAdminRO}
+          dashboard_protocol:
+            if:
+              - internal_tls_enabled
+              - 'https'
+              - 'http'
 
 outputs:
   role_data:
@@ -96,14 +106,10 @@ outputs:
             list_concat:
               - - '6800-7300'
               - if:
-                - dashboard_enabled
+                - {get_param: CephEnableDashboard}
                 - - {get_param: CephDashboardPort}
-                - []
       upgrade_tasks: []
-      puppet_config:
-        config_image: ''
-        config_volume: ''
-        step_config: ''
+      puppet_config: {}
       docker_config: {}
       external_deploy_tasks:
         list_concat:
@@ -112,20 +118,17 @@ outputs:
             when: step|int == 1
             tags:
               - ceph
-              - ceph_fstobs
-              - ceph_systemd
+              - cephadm_adopt
             block:
               - name: set ceph-ansible group vars mgrs
                 set_fact:
                   ceph_ansible_group_vars_mgrs:
                     if:
                     - internal_tls_enabled
-                    -
-                      map_merge:
+                    - map_merge:
                       - {get_attr: [CephMgrAnsibleVars, value, vars]}
                       - dashboard_crt: /etc/pki/tls/certs/ceph_dashboard.crt
-                      - dashboard_key: /etc/pki/tls/private/ceph_dashboard.key
-                      - dashboard_protocol: 'https'
+                        dashboard_key: /etc/pki/tls/private/ceph_dashboard.key
                     - {get_attr: [CephMgrAnsibleVars, value, vars]}
               - name: generate ceph-ansible group vars mgrs
                 copy:
@@ -133,32 +136,43 @@ outputs:
                   content: "{{ceph_ansible_group_vars_mgrs|to_nice_yaml}}"
       external_update_tasks: {get_attr: [CephBase, role_data, external_update_tasks]}
       external_upgrade_tasks: {get_attr: [CephBase, role_data, external_upgrade_tasks]}
-      config_settings:
-        map_merge:
-          - if:
-            - internal_tls_enabled
-            -
-              generate_service_certificates: true
-              ceph_dashboard_certificate_specs:
-                service_certificate: '/etc/pki/tls/certs/ceph_dashboard.crt'
-                service_key: '/etc/pki/tls/private/ceph_dashboard.key'
-                hostname:
-                  str_replace:
-                    template: "%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, CephDashboardNetwork]}
-                principal:
-                  str_replace:
-                    template: "ceph_dashboard/%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, CephDashboardNetwork]}
-                postsave_cmd: "/usr/bin/certmonger-dashboard-refresh.sh"
-            - {}
       metadata_settings:
         if:
         - internal_tls_enabled
-        -
-          - service: ceph_dashboard
+        - - service: ceph_dashboard
             network: {get_param: [ServiceNetMap, CephDashboardNetwork]}
             type: node
-        - null
+      deploy_steps_tasks:
+        if:
+          - internal_tls_enabled
+          - - name: Certificate generation
+              when: step|int == 1
+              block:
+                - include_role:
+                    name: linux-system-roles.certificate
+                  vars:
+                    certificate_requests:
+                      - name: ceph_dashboard
+                        dns:
+                          str_replace:
+                            template: "{{fqdn_$NETWORK}}"
+                            params:
+                              $NETWORK: {get_param: [ServiceNetMap, CephDashboardNetwork]}
+                        principal:
+                          str_replace:
+                            template: "ceph_dashboard/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                            params:
+                              $NETWORK: {get_param: [ServiceNetMap, CephDashboardNetwork]}
+                        run_after: |
+                          # Get mgr systemd unit
+                          mgr_unit=$(systemctl list-units | awk '/ceph-mgr/ {print $1}')
+                          # Restart the mgr systemd unit
+                          if [ -n "$mgr_unit" ]; then
+                              systemctl restart "$mgr_unit"
+                          fi
+                        key_size:
+                          if:
+                            - key_size_override_set
+                            - {get_param: CephCertificateKeySize}
+                            - {get_param: CertificateKeySize}
+                        ca: ipa

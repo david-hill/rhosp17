@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Multipathd service
@@ -44,9 +44,6 @@ parameters:
   RoleParameters:
     default: {}
     description: Parameters specific to the role
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
 
 conditions:
@@ -125,7 +122,7 @@ outputs:
                   - /var/lib/kolla/config_files/multipathd.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/multipathd:/var/lib/kolla/config_files/src:ro
                   - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
-                  - /dev/:/dev/
+                  - /dev:/dev
                   - /run/:/run/
                   - /sys:/sys
                   - /lib/modules:/lib/modules:ro

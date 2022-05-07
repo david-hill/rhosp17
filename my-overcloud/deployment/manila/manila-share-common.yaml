@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Provides the list of Docker volumes and environment to be used by the
@@ -20,9 +20,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -38,13 +35,16 @@ parameters:
     type: string
     constraints:
     - allowed_values: ['CEPHFS', 'NFS']
+  CephConfigPath:
+    type: string
+    default: "/var/lib/tripleo-config/ceph"
+    description: |
+      The path where the Ceph Cluster config files are stored on the host.
 
 conditions:
-
   cephfs_nfs_enabled: {equals: [{get_param: ManilaCephFSCephFSProtocolHelperType}, 'NFS']}
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -54,11 +54,14 @@ outputs:
     value:
       list_concat:
         - {get_attr: [ContainersCommon, volumes]}
-        -
-          - /var/lib/kolla/config_files/manila_share.json:/var/lib/kolla/config_files/config.json:ro
+        - - /var/lib/kolla/config_files/manila_share.json:/var/lib/kolla/config_files/config.json:ro
           - /var/lib/config-data/puppet-generated/manila:/var/lib/kolla/config_files/src:ro
-          - /etc/ceph:/var/lib/kolla/config_files/src-ceph:ro
-          - /dev/:/dev/
+          - list_join:
+            - ':'
+            - - {get_param: CephConfigPath}
+            - - '/var/lib/kolla/config_files/src-ceph'
+            - - 'ro'
+          - /dev:/dev
           - /run/:/run/
           - /sys:/sys
           - /lib/modules:/lib/modules:ro
@@ -66,11 +69,8 @@ outputs:
           - /var/log/containers/manila:/var/log/manila:z
         - if:
           - cephfs_nfs_enabled
-          -
-            - /etc/ganesha:/etc/ganesha
+          - - /etc/ganesha:/etc/ganesha
             - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket
-          - null
-
   manila_share_environment:
     description: Docker environment for the manila-share container (HA or non-HA)
     value:

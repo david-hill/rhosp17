@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Ceph Grafana service.
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -60,15 +57,23 @@ parameters:
   AlertManagerContainerImage:
     description: Ceph AlertManager container image
     type: string
-  NodeExporterContainerImage:
-    description: Ceph NodeExporter container image
-    type: string
   EnableInternalTLS:
     type: boolean
     default: false
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  GrafanaCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  key_size_override_set:
+    not: {equals: [{get_param: GrafanaCertificateKeySize}, '']}
 
 resources:
   CephBase:
@@ -76,7 +81,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -96,7 +100,6 @@ resources:
           prometheus_container_image: {get_param: PrometheusContainerImage}
           prometheus_port: 9092
           alertmanager_container_image: {get_param: AlertManagerContainerImage}
-          node_exporter_container_image: {get_param: NodeExporterContainerImage}
 outputs:
   role_data:
     description: Role data for the Ceph Dashboard service.
@@ -113,10 +116,7 @@ outputs:
           - 9100
           - 9283
       upgrade_tasks: []
-      puppet_config:
-        config_image: ''
-        config_volume: ''
-        step_config: ''
+      puppet_config: {}
       docker_config: {}
       external_deploy_tasks:
         list_concat:
@@ -125,23 +125,17 @@ outputs:
             when: step == '1'
             tags:
               - ceph
-              - ceph_fstobs
-              - ceph_systemd
+              - cephadm_adopt
             block:
               - name: set ceph-ansible group vars
                 set_fact:
                   ceph_ansible_group_vars_grafana:
                     if:
-                    - internal_tls_enabled
-                    - yaql:
-                        data:
-                          default:
-                            map_merge:
-                            - {get_attr: [CephGrafanaAnsibleVars, value, vars]}
-                          certmap:
-                            grafana_crt: '/etc/pki/tls/certs/ceph_grafana.crt'
-                            grafana_key: '/etc/pki/tls/private/ceph_grafana.key'
-                        expression: $.data.default.mergeWith($.data.certmap)
+                    - {get_param: EnableInternalTLS}
+                    - map_merge:
+                        - {get_attr: [CephGrafanaAnsibleVars, value, vars]}
+                        - grafana_crt: '/etc/pki/tls/certs/ceph_grafana.crt'
+                          grafana_key: '/etc/pki/tls/private/ceph_grafana.key'
                     - {get_attr: [CephGrafanaAnsibleVars, value, vars]}
               - name: generate ceph-ansible grafana-server group vars
                 copy:
@@ -149,32 +143,43 @@ outputs:
                   content: "{{ceph_ansible_group_vars_grafana|to_nice_yaml}}"
       external_update_tasks: {get_attr: [CephBase, role_data, external_update_tasks]}
       external_upgrade_tasks: {get_attr: [CephBase, role_data, external_upgrade_tasks]}
-      config_settings:
-        map_merge:
-          - if:
-            - internal_tls_enabled
-            -
-              generate_service_certificates: true
-              ceph_grafana_certificate_specs:
-                service_certificate: '/etc/pki/tls/certs/ceph_grafana.crt'
-                service_key: '/etc/pki/tls/private/ceph_grafana.key'
-                hostname:
-                  str_replace:
-                    template: "%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, CephGrafanaNetwork]}
-                principal:
-                  str_replace:
-                    template: "ceph_grafana/%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, CephGrafanaNetwork]}
-                postsave_cmd: "/usr/bin/certmonger-grafana-refresh.sh"
-            - {}
       metadata_settings:
         if:
-        - internal_tls_enabled
-        -
-          - service: ceph_grafana
+        - {get_param: EnableInternalTLS}
+        - - service: ceph_grafana
             network: {get_param: [ServiceNetMap, CephGrafanaNetwork]}
             type: node
-        - null
+      deploy_steps_tasks:
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  - name: ceph_grafana
+                    dns:
+                      str_replace:
+                        template: "{{fqdn_$NETWORK}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, CephGrafanaNetwork]}
+                    principal:
+                      str_replace:
+                        template: "ceph_grafana/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, CephGrafanaNetwork]}
+                    run_after: |
+                      # Get grafana systemd unit
+                      grafana_unit=$(systemctl list-unit-files | awk '/grafana/ {print $1}')
+                      # Restart the grafana systemd unit
+                      if [ -z "$grafana_unit" ]; then
+                          systemctl restart "$grafana_unit"
+                      fi
+                    key_size:
+                      if:
+                        - key_size_override_set
+                        - {get_param: GrafanaCertificateKeySize}
+                        - {get_param: CertificateKeySize}
+                    ca: ipa

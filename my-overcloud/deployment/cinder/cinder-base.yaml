@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Cinder base service. Shared by all Cinder services.
@@ -17,11 +17,9 @@ parameters:
     description: Set to True to enable debugging on all services.
     type: boolean
   CinderDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging on Cinder services.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   EnableSQLAlchemyCollectd:
     type: boolean
     description: >
@@ -36,9 +34,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -102,14 +97,14 @@ parameters:
     description: >
         Cron to purge db entries marked as deleted and older than $age - Max Delay
     default: '3600'
+  CinderRpcResponseTimeout:
+    default: 60
+    description: Cinder's RPC response timeout, in seconds.
+    type: number
   NovaPassword:
     type: string
     description: The password for the nova service and db account
     hidden: true
-
-conditions:
-  service_debug_unset: {equals : [{get_param: CinderDebug}, '']}
-  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 outputs:
   role_data:
@@ -126,24 +121,22 @@ outputs:
             path: /cinder
             query:
                 if:
-                  - enable_sqlalchemy_collectd
-                  -
-                      read_default_file: /etc/my.cnf.d/tripleo.cnf
-                      read_default_group: tripleo
-                      plugin: collectd
-                      collectd_program_name: cinder
-                      collectd_host: localhost
-                  -
-                      read_default_file: /etc/my.cnf.d/tripleo.cnf
-                      read_default_group: tripleo
-
+                  - {get_param: EnableSQLAlchemyCollectd}
+                  - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                    read_default_group: tripleo
+                    plugin: collectd
+                    collectd_program_name: cinder
+                    collectd_host: localhost
+                  - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                    read_default_group: tripleo
         cinder::logging::debug:
           if:
-          - service_debug_unset
-          - {get_param: Debug }
-          - {get_param: CinderDebug }
+          - {get_param: CinderDebug}
+          - true
+          - {get_param: Debug}
         cinder::storage_availability_zone: {get_param: CinderStorageAvailabilityZone}
         cinder::rabbit_heartbeat_timeout_threshold: 60
+        cinder::rpc_response_timeout: {get_param: CinderRpcResponseTimeout}
         cinder::db::database_db_max_retries: -1
         cinder::db::database_max_retries: -1
         cinder::cron::db_purge::minute: {get_param: CinderCronDbPurgeMinute}

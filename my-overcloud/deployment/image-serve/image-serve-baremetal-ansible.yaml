@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Configures apache to serve container images on a host.
@@ -18,9 +18,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -50,7 +47,7 @@ outputs:
             - 13787
       host_prep_tasks:
         - name: authorize httpd to listen on registry ports
-          seport:
+          community.general.seport:
             ports:
               - '8787'
               - '13787'

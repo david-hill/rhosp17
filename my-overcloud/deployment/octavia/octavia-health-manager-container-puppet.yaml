@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Octavia health-manager service configured with Puppet
@@ -32,9 +32,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -82,7 +79,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -140,7 +136,7 @@ outputs:
               preserve_properties: true
           permissions:
             - path: /var/log/octavia
-              owner: octavia:octavia
+              owner: root:root
               recurse: true
       docker_config:
         step_2:
@@ -155,13 +151,13 @@ outputs:
               # missing here because we use the same config_volume for all
               # octavia services, hence the same container image to generate
               # configuration.
-              - /var/lib/config-data/puppet-generated/octavia/etc/octavia:/etc/octavia/:z
+              - /var/lib/config-data/puppet-generated/octavia/etc/octavia:/etc/octavia:z
             command: ['/bin/bash', '-c', 'mkdir -p /etc/octavia/conf.d/octavia-health-manager; chown -R octavia:octavia /etc/octavia/conf.d/octavia-health-manager']
         step_5:
           map_merge:
             - octavia_health_manager:
                 start_order: 2
-                stop_grace_period: 300
+                stop_grace_period: 630
                 image: *octavia_health_manager_image
                 net: host
                 privileged: false
@@ -191,11 +187,12 @@ outputs:
                         -
                           - /var/lib/kolla/config_files/octavia_rsyslog.json:/var/lib/kolla/config_files/config.json:ro
                           - /var/lib/config-data/puppet-generated/octavia:/var/lib/kolla/config_files/src:ro
-                          - /var/log/containers/octavia:/var/log/octavia:z
+                          - /var/log/containers/octavia-amphorae:/var/log/octavia:z
                     environment:
                       KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
                 - {}
-
+      update_tasks: {get_attr: [OctaviaBase, role_data, update_tasks]}
+      upgrade_tasks: {get_attr: [OctaviaBase, role_data, upgrade_tasks]}
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -205,3 +202,19 @@ outputs:
             mode: "{{ item.mode }}"
           with_items:
             - { 'path': /var/log/containers/octavia, 'setype': container_file_t, 'mode': '0750' }
+            - { 'path': /var/log/containers/octavia-amphorae, 'setype': container_file_t, 'mode': '0750' }
+      external_upgrade_tasks:
+        - when:
+            - step|int == 1
+          tags:
+            - never
+            - system_upgrade_transfer_data
+            - system_upgrade_stop_services
+          block:
+            - name: Stop octavia health manager container
+              import_role:
+                name: tripleo_container_stop
+              vars:
+                tripleo_containers_to_stop:
+                  - octavia_health_manager
+                tripleo_delegate_to: "{{ groups['octavia_health_manager'] | default([]) }}"

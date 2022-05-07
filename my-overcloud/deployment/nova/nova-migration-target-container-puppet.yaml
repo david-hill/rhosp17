@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Nova Migration Target service
@@ -19,9 +19,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -54,15 +51,8 @@ parameters:
     default: 2022
     description: Target port for migration over ssh
     type: number
-  NovaNfsEnabled:
-    default: false
-    description: Whether to enable or not the NFS backend for Nova
-    type: boolean
-    tags:
-      - role_specific
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -71,17 +61,8 @@ resources:
     properties:
       EndpointMap: {get_param: EndpointMap}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-
-conditions:
-  nova_nfs_enabled:
-    or:
-      - and:
-        - equals: [{get_param: NovaNfsEnabled}, true]
-        - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, '']
-      - equals: [{get_param: [RoleParameters, NovaNfsEnabled]}, true]
 
 outputs:
   role_data:
@@ -89,9 +70,33 @@ outputs:
     value:
       service_name: nova_migration_target
       firewall_rules:
-        '113 nova_migration_target':
-          dport:
-            - {get_param: MigrationSshPort}
+        map_merge:
+          - map_merge:
+              repeat:
+                for_each:
+                  <%net_cidr%>:
+                    get_param:
+                      - ServiceData
+                      - net_cidr_map
+                      - {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
+                template:
+                  '113 nova_migration_target accept libvirt subnet <%net_cidr%>':
+                    source: <%net_cidr%>
+                    proto: 'tcp'
+                    dport: {get_param: MigrationSshPort}
+          - map_merge:
+              repeat:
+                for_each:
+                  <%net_cidr%>:
+                    get_param:
+                      - ServiceData
+                      - net_cidr_map
+                      - {get_param: [ServiceNetMap, NovaApiNetwork]}
+                template:
+                  '113 nova_migration_target accept api subnet <%net_cidr%>':
+                    source: <%net_cidr%>
+                    proto: 'tcp'
+                    dport: {get_param: MigrationSshPort}
       config_settings:
         map_merge:
           - get_attr: [SshdBase, role_data, config_settings]
@@ -105,13 +110,7 @@ outputs:
                 template:
                   "%{hiera('$NETWORK')}"
                 params:
-                  $NETWORK:
-                    get_param:
-                      - ServiceNetMap
-                      - str_replace:
-                          template: "ROLENAMEHostnameResolveNetwork"
-                          params:
-                            ROLENAME: {get_param: RoleName}
+                  $NETWORK: {get_param: [ServiceNetMap, NovaLibvirtNetwork]}
             cold_migration_ssh_inbound_addr:
               str_replace:
                 template:
@@ -172,17 +171,16 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/nova-migration-target.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/nova-migration-target.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/nova_libvirt:/var/lib/kolla/config_files/src:ro
-                  - /etc/ssh/:/host-ssh/:ro
+                  - /etc/ssh:/host-ssh:ro
                   - /run/libvirt:/run/libvirt:shared,z
                   - /var/lib/nova:/var/lib/nova:shared
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       deploy_steps_tasks:
         - name: validate nova-migration-target container state
-          podman_container_info:
+          containers.podman.podman_container_info:
             name: nova_migration_target
           register: nova_migration_target_infos
           failed_when:

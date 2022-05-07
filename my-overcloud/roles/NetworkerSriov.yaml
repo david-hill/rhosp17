@@ -12,15 +12,17 @@
   tags:
     - external_bridge
   HostnameFormatDefault: '%stackname%-networker-sriov-%index%'
+  RoleParametersDefault:
+    OVNCMSOptions: "enable-chassis-as-gw"
   update_serial: 1
   ServicesDefault:
     - OS::TripleO::Services::Aide
     - OS::TripleO::Services::AuditD
     - OS::TripleO::Services::BootParams
     - OS::TripleO::Services::CACerts
-    - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::Docker
+    - OS::TripleO::Services::Frr
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::IronicNeutronAgent
@@ -42,6 +44,7 @@
     - OS::TripleO::Services::OVNController
     - OS::TripleO::Services::OVNMetadataAgent
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::Snmp

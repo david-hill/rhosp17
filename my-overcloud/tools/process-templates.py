@@ -1,4 +1,4 @@
-#!/usr/libexec/platform-python
+#!/usr/bin/python3
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
@@ -157,6 +157,11 @@ def process_templates(template_path, role_data_path, output_dir,
         network_data = yaml.safe_load(network_data_file)
         if network_data is None:
             network_data = []
+
+    # Set internal network index key for each network, network resources
+    # are created with a tag tripleo_net_idx
+    for idx, net in enumerate(network_data):
+        network_data[idx].update({'idx': idx})
 
     j2_excludes = {}
     j2_excludes_path = os.path.join(template_path, 'j2_excludes.yaml')
@@ -357,6 +362,10 @@ def clean_templates(base_path, role_data_path, network_data_path):
             'network', 'ports', '%s_v6.yaml' % network['name_lower'])
         ports_from_pool_v6_path = os.path.join(
             'network', 'ports', '%s_from_pool_v6.yaml' % network['name_lower'])
+        deployed_ports_path = os.path.join(
+            'network', 'ports', 'deployed_%s.yaml' % network['name_lower'])
+        deployed_vip_ports_path = os.path.join(
+            'network', 'ports', 'deployed_vip_%s.yaml' % network['name_lower'])
 
         delete(network_path)
         delete(network_from_pool_path)
@@ -368,6 +377,8 @@ def clean_templates(base_path, role_data_path, network_data_path):
         delete(ports_from_pool_path)
         delete(ports_v6_path)
         delete(ports_from_pool_v6_path)
+        delete(deployed_ports_path)
+        delete(deployed_vip_ports_path)
 
     with open(role_data_path) as role_data_file:
         role_data = yaml.safe_load(role_data_file)
@@ -388,16 +399,6 @@ def clean_templates(base_path, role_data_path, network_data_path):
         delete(host_config_and_reboot_path)
         delete(krb_service_principals_path)
         delete(common_services_path)
-
-        nic_config_dir = os.path.join(base_path, 'network', 'config')
-        for sample_nic_config_dir in os.listdir(nic_config_dir):
-            delete(os.path.join(
-                    nic_config_dir, sample_nic_config_dir,
-                    '%s.yaml' % role['name'].lower()))
-            if 'deprecated_nic_config_name' in role:
-                delete(os.path.join(
-                        nic_config_dir, sample_nic_config_dir,
-                        role['deprecated_nic_config_name']))
 
 
 opts = parse_opts(sys.argv)

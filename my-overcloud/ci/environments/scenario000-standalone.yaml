@@ -47,6 +47,7 @@ resource_registry:
   OS::TripleO::Services::DesignateProducer: OS::Heat::None
   OS::TripleO::Services::DesignateSink: OS::Heat::None
   OS::TripleO::Services::DesignateWorker: OS::Heat::None
+  OS::TripleO::Services::DesignateBind: OS::Heat::None
   OS::TripleO::Services::Etcd: OS::Heat::None
   OS::TripleO::Services::ExternalSwiftProxy: OS::Heat::None
   OS::TripleO::Services::GlanceApi: OS::Heat::None
@@ -96,10 +97,6 @@ resource_registry:
   OS::TripleO::Services::MasqueradeNetworks: OS::Heat::None
   OS::TripleO::Services::Memcached: OS::Heat::None
   OS::TripleO::Services::MetricsQdr: OS::Heat::None
-  OS::TripleO::Services::MistralApi: OS::Heat::None
-  OS::TripleO::Services::MistralEngine: OS::Heat::None
-  OS::TripleO::Services::MistralEventEngine: OS::Heat::None
-  OS::TripleO::Services::MistralExecutor: OS::Heat::None
   OS::TripleO::Services::Multipathd: OS::Heat::None
   # OS::TripleO::Services::MySQL: OS::Heat::None
   OS::TripleO::Services::NeutronApi: OS::Heat::None
@@ -162,8 +159,6 @@ resource_registry:
   OS::TripleO::Services::Redis: OS::Heat::None
   OS::TripleO::Services::RsyslogSidecar: OS::Heat::None
   OS::TripleO::Services::SELinux: OS::Heat::None
-  OS::TripleO::Services::SaharaApi: OS::Heat::None
-  OS::TripleO::Services::SaharaEngine: OS::Heat::None
   OS::TripleO::Services::Securetty: OS::Heat::None
   OS::TripleO::Services::Snmp: OS::Heat::None
   OS::TripleO::Services::SwiftDispersion: OS::Heat::None
@@ -177,12 +172,11 @@ resource_registry:
   OS::TripleO::Services::TripleoUI: OS::Heat::None
   OS::TripleO::Services::Tuned: OS::Heat::None
   # OS::TripleO::Services::UndercloudMinionMessaging: ../../deployment/undercloud/minion-rabbitmq-puppet.yaml
+  OS::TripleO::Services::Unbound: OS::Heat::None
   OS::TripleO::Services::UndercloudTLS: OS::Heat::None
   OS::TripleO::Services::UndercloudUpgrade: OS::Heat::None
-  OS::TripleO::Services::VRTSHyperScale: OS::Heat::None
   OS::TripleO::Services::Vpp: OS::Heat::None
   OS::TripleO::Services::Xinetd: OS::Heat::None
-  OS::TripleO::Services::Zaqar: OS::Heat::None
 parameter_defaults:
   Debug: true
   NotificationDriver: 'noop'

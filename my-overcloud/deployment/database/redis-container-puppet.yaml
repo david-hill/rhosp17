@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Redis services
@@ -25,9 +25,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -39,13 +36,22 @@ parameters:
   EnableInternalTLS:
     type: boolean
     default: false
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  RedisCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  key_size_override_set:
+    not: {equals: [{get_param: RedisCertificateKeySize}, '']}
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -55,7 +61,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
 
 outputs:
   role_data:
@@ -87,33 +92,11 @@ outputs:
                   $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
             tripleo::profile::base::database::redis::tls_proxy_port: 6379
           - if:
-            - internal_tls_enabled
+            - {get_param: EnableInternalTLS}
             - tripleo::redis::service_certificate: '/etc/pki/tls/certs/redis.crt'
               redis_certificate_specs:
                 service_certificate: '/etc/pki/tls/certs/redis.crt'
                 service_key: '/etc/pki/tls/private/redis.key'
-                hostname:
-                  str_replace:
-                    template: "%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
-                dnsnames:
-                  - str_replace:
-                      template: "%{hiera('cloud_name_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
-                  - str_replace:
-                      template:
-                        "%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
-                principal:
-                  str_replace:
-                    template: "redis/%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
-                postsave_cmd: "/usr/bin/certmonger-redis-refresh.sh"
-            - {}
       service_config_settings: {get_attr: [RedisBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS
       puppet_config:
@@ -178,7 +161,7 @@ outputs:
                 environment:
                   KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
             - if:
-                - internal_tls_enabled
+                - {get_param: EnableInternalTLS}
                 - redis_tls_proxy:
                     start_order: 2
                     image: *redis_image
@@ -197,19 +180,66 @@ outputs:
                           - /etc/pki/tls/private/redis.key:/etc/pki/tls/private/redis.key:ro
                     environment:
                       KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
-                - {}
       metadata_settings:
         if:
-          - internal_tls_enabled
-          -
-            - service: redis
+          - {get_param: EnableInternalTLS}
+          - - service: redis
               network: {get_param: [ServiceNetMap, RedisNetwork]}
               type: vip
             - service: redis
               network: {get_param: [ServiceNetMap, RedisNetwork]}
               type: node
-          - null
+      deploy_steps_tasks:
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  - name: redis
+                    dns:
+                      - str_replace:
+                          template: "{{fqdn_$NETWORK}}"
+                          params:
+                            $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                      - str_replace:
+                          template: "{{cloud_names.cloud_name_NETWORK}}"
+                          params:
+                            NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                    principal:
+                      str_replace:
+                        template: "redis/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
+                    run_after: |
+                      container_name=$({{container_cli}} ps --format=\{\{.Names\}\} | grep redis_tls_proxy)
+                      service_crt="/etc/pki/tls/certs/redis.crt"
+                      service_key="/etc/pki/tls/private/redis.key"
+                      # Copy the new cert from the mount-point to the real path
+                      {{container_cli}} exec "$container_name" cp "/var/lib/kolla/config_files/src-tls$service_crt" "$service_crt"
+                      # Copy the new cert from the mount-point to the real path
+                      {{container_cli}} exec "$container_name" cp "/var/lib/kolla/config_files/src-tls$service_key" "$service_key"
+                      # Set appropriate permissions
+                      {{container_cli}} exec "$container_name" chown memcached:memcached "$service_crt"
+                      {{container_cli}} exec "$container_name" chown memcached:memcached "$service_key"
+                      # Trigger a reload for stunnel to read the new certificate
+                      {{container_cli}} exec pkill -o -HUP stunnel
+                    key_size:
+                      if:
+                        - key_size_override_set
+                        - {get_param: RedisCertificateKeySize}
+                        - {get_param: CertificateKeySize}
+                    ca: ipa
+      external_deploy_tasks: {get_attr: [RedisBase, role_data, external_deploy_tasks]}
       host_prep_tasks:
+        - name: create fcontext entry for redis data
+          community.general.sefcontext:
+            target: "/var/run/redis(/.*)?" # conflicts with equivalency rule '/run /var/run' - have to use /var/run here...
+            setype: container_file_t
+            state: present
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
@@ -263,7 +293,6 @@ outputs:
                     list_concat:
                       - - redis
                       - - if:
-                            - internal_tls_enabled
+                            - {get_param: EnableInternalTLS}
                             - - redis_tls_proxy
-                            - null
                 tripleo_delegate_to: "{{ groups['redis'] | default([]) }}"

@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   TripleO Package installation settings
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -48,6 +45,8 @@ parameters:
       development/testing. For example, LEAPP_DEVEL_SKIP_RHSM=1.
     type: string
     default: ''
+    tags:
+      - role_specific
   UpgradeLeappCommandOptions:
     description: |
       In case or using UpgradeLeappDevelSkip with LEAPP_NO_RHSM=1 user
@@ -55,24 +54,38 @@ parameters:
       leapp to use these repositories for the upgrade process.
     type: string
     default: ''
+    tags:
+      - role_specific
   UpgradeLeappRebootTimeout:
     description: Timeout (seconds) for the OS upgrade phase via Leapp
     type: number
     default: 3600
+  UpgradeLeappPostRebootDelay:
+    description: |
+      Maximum (seconds) to wait for machine to reboot and respond to a test
+      command.
+    type: number
+    default: 120
   UpgradeLeappToRemove:
     default: []
     description: List of packages to remove during Leapp upgrade.
     type: comma_delimited_list
+    tags:
+      - role_specific
   UpgradeLeappToInstall:
     default: []
     description: List of packages to install after Leapp upgrade.
     type: comma_delimited_list
+    tags:
+      - role_specific
   UpgradeInitCommand:
     type: string
     description: |
       Command or script snippet to run on all overcloud nodes to
       initialize the upgrade process. E.g. a repository switch.
     default: ''
+    tags:
+      - role_specific
   UpgradeInitCommonCommand:
     type: string
     description: |
@@ -82,15 +95,47 @@ parameters:
       environment files.
     default: ''
   SkipPackageUpdate:
-    default: 'false'
+    default: false
     description: Set to true to skip the update all packages
     type: boolean
   SkipRhelEnforcement:
-    default: "false"
+    default: false
     description: Whether to avoid or not RHEL/OSP policies enforcement on Red Hat.
                  Mainly for CI purpose.  It shouldn't matter on other distributions
                  where it's disabled in the role. Set to true to skip the enforcement.
-    type: string
+    type: boolean
+  DnfStreams:
+    default: []
+    description: List of streams to be configured before updating packages. Each list
+             element contains a dictionary with the following values defined
+             module[mandatory], stream[mandatory] and profile[optional]. If the profile
+             is not specified 'common' will be used instead.
+    type: json
+    tags:
+      - role_specific
+
+resources:
+  RoleParametersValue:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        map_replace:
+          - map_replace:
+            - dnf_module_list: DnfStreams
+              upgrade_leapp_devel_skip: UpgradeLeappDevelSkip
+              upgrade_leapp_command_options: UpgradeLeappCommandOptions
+              upgrade_leapp_to_remove: UpgradeLeappToRemove
+              upgrade_leapp_to_install: UpgradeLeappToInstall
+              upgrade_init_command: UpgradeInitCommand
+            - values: {get_param: [RoleParameters]}
+          - values:
+              DnfStreams: {get_param: DnfStreams}
+              UpgradeLeappDevelSkip: {get_param: UpgradeLeappDevelSkip}
+              UpgradeLeappCommandOptions: {get_param: UpgradeLeappCommandOptions}
+              UpgradeLeappToRemove: {get_param: UpgradeLeappToRemove}
+              UpgradeLeappToInstall: {get_param: UpgradeLeappToInstall}
+              UpgradeInitCommand: {get_param: UpgradeInitCommand}
 
 outputs:
   role_data:
@@ -121,9 +166,10 @@ outputs:
                  ansible_facts['distribution'] == 'RedHat' and
                  ansible_facts['distribution_major_version'] is version('7', '==') }}
             upgrade_leapp_debug: {get_param: UpgradeLeappDebug}
-            upgrade_leapp_devel_skip: {get_param: UpgradeLeappDevelSkip}
-            upgrade_leapp_command_options: {get_param: UpgradeLeappCommandOptions}
+            upgrade_leapp_devel_skip: {get_attr: [RoleParametersValue, value, 'upgrade_leapp_devel_skip']}
+            upgrade_leapp_command_options: {get_attr: [RoleParametersValue, value, 'upgrade_leapp_command_options']}
             upgrade_leapp_reboot_timeout: {get_param: UpgradeLeappRebootTimeout}
+            upgrade_leapp_post_reboot_delay: {get_param: UpgradeLeappPostRebootDelay}
           vars:
             _upgradeLeappEnabled: {get_param: UpgradeLeappEnabled}
           tags:
@@ -140,7 +186,8 @@ outputs:
           block:
             - name: remove all OpenStack packages
               shell: |
-                yum -y remove *el7ost* -- \
+                yum -y remove *el7ost* \
+                  mariadb-server* -- \
                   -*openvswitch* \
                   -python2-babel \
                   -python2-dateutil \
@@ -154,14 +201,14 @@ outputs:
                 state: latest
             - name: "add packages into Leapp's to_remove file"
               vars:
-                pkg_to_remove: { get_param: UpgradeLeappToRemove }
+                pkg_to_remove: {get_attr: [RoleParametersValue, value, 'upgrade_leapp_to_remove']}
               lineinfile:
                 path: "/etc/leapp/transaction/to_remove"
                 line: "{{ item }}"
               loop: "{{ pkg_to_remove }}"
             - name: "add packages into Leapp's to_install file"
               vars:
-                pkg_to_install: { get_param: UpgradeLeappToInstall }
+                pkg_to_install: {get_attr: [RoleParametersValue, value, 'upgrade_leapp_to_install']}
               lineinfile:
                 path: "/etc/leapp/transaction/to_install"
                 line: "{{ item }}"
@@ -206,10 +253,10 @@ outputs:
             - name: reboot to perform the upgrade
               reboot:
                 reboot_timeout: "{{upgrade_leapp_reboot_timeout}}"
-            - name: Clear gathered facts from all currently targeted hosts
-              meta: clear_facts
-            - name: Force facts refresh after OS upgrade to refresh cache.
-              setup:
+                # TODO(holser): ansible 2.10 and higher provides boot_time_command to detect boot_id before and after reboot.
+                test_command: >-
+                  source /etc/os-release; [ "${VERSION_ID%.*}" -ge "8" ] && systemctl is-system-running | grep -qE "running|degraded" || exit 1
+                post_reboot_delay: "{{ upgrade_leapp_post_reboot_delay }}"
 
         - name: Package and repo update tasks
           when: step|int == 0
@@ -220,13 +267,23 @@ outputs:
                   - ''
                   - - "#!/bin/bash\n\n"
                     - "if [[ -f /etc/resolv.conf.save ]] ; then rm /etc/resolv.conf.save; fi\n\n"
-                    - {get_param: UpgradeInitCommand}
+                    - {get_attr: [RoleParametersValue, value, 'upgrade_init_command']}
             - name: Run UpgradeInitCommonCommand
               shell:
                 list_join:
                   - ''
                   - - "#!/bin/bash\n\n"
                     - {get_param: UpgradeInitCommonCommand}
+            - name: Ensure DNF modules have the right stream
+              vars:
+                dnf_module_list: {get_attr: [RoleParametersValue, value, 'dnf_module_list']}
+              dnf:
+                name: "@{{ item.module }}:{{ item.stream }}/{{ item.profile|default('common') }}"
+                state: present
+              loop: "{{ dnf_module_list|list }}"
+              when:
+                - ansible_facts['distribution_major_version'] is version('8', '>=')
+                - dnf_module_list|length > 0
             - name: Ensure TripleO prerequisite packages are installed
               package:
                 name:
@@ -235,13 +292,28 @@ outputs:
                   - net-snmp
                   - openstack-selinux
                   - os-net-config
-                  - pacemaker
-                  - pcs
                   - puppet-tripleo
                   - python3-heat-agent*
+                  - python3-openstackclient
                   - rsync
                 state: present
-              when: ansible_distribution_major_version == '8'
+              when: ansible_facts['distribution_major_version'] is version('8', '==')
+        - name: check if libvirt is installed
+          command: /usr/bin/rpm -q libvirt-daemon
+          failed_when: false
+          register: libvirt_installed
+          check_mode: false
+        - name: make sure libvirt services are disabled and masked
+          service:
+            name: "{{ item }}"
+            state: stopped
+            enabled: false
+            masked: true
+            daemon_reload: true
+          loop:
+            - libvirtd.service
+            - virtlogd.socket
+          when: libvirt_installed.rc == 0
         - name: Special treatment for OpenvSwitch
           tripleo_ovs_upgrade:
           when:
@@ -265,10 +337,13 @@ outputs:
           register: os_net_config_need_upgrade
           when: step|int == 3
         - name: Check that os-net-config has configuration
-          shell: test -s /etc/os-net-config/config.json
-          register: os_net_config_has_config
-          failed_when: false
           when: step|int == 3
+          stat:
+            path: /etc/os-net-config/config.json
+            get_attributes: false
+            get_checksum: false
+            get_mime: false
+          register: stat_config_json
         - block:
             - name: Upgrade os-net-config
               package: name=os-net-config state=latest
@@ -280,7 +355,7 @@ outputs:
           when:
             - step|int == 3
             - os_net_config_need_upgrade.stdout
-            - os_net_config_has_config.rc == 0
+            - stat_config_json.stat.exists
         # Exclude ansible until https://github.com/ansible/ansible/issues/56636
         # is available
         - name: Update all packages
@@ -304,10 +379,6 @@ outputs:
               include_role:
                 name: tripleo_persist
                 tasks_from: cleanup.yml
-            - name: cleanup tripleo_transfer
-              include_role:
-                name: tripleo_transfer
-                tasks_from: cleanup.yml
       update_tasks:
         - name: Enforce RHOSP rules regarding subscription.
           include_role:
@@ -316,8 +387,19 @@ outputs:
             skip_rhel_enforcement: {get_param: SkipRhelEnforcement}
           when:
             - step|int == 0
-            - ansible_distribution == 'RedHat'
+            - ansible_facts['distribution'] == 'RedHat'
             - not (skip_rhel_enforcement | bool)
+        - name: Ensure DNF modules have the right stream
+          vars:
+            dnf_module_list: {get_attr: [RoleParametersValue, value, 'dnf_module_list']}
+          dnf:
+            name: "@{{ item.module }}:{{ item.stream }}/{{ item.profile|default('common') }}"
+            state: present
+          loop: "{{ dnf_module_list|list }}"
+          when:
+            - step|int == 0
+            - ansible_facts['distribution_major_version'] is version('8', '>=')
+            - dnf_module_list|length > 0
         - name: Check for existing yum.pid
           stat:  path=/run/yum.pid
           register: yum_pid_file

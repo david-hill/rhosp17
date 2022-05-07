@@ -101,7 +101,9 @@ if [ -z "$NO_ARCHIVE" ]; then
     ro_files="/etc/puppet/ /etc/puppetlabs/ /opt/puppetlabs/ /etc/pki/ca-trust/extracted "
     ro_files+="/etc/pki/ca-trust/source/anchors /etc/pki/tls/certs/ca-bundle.crt "
     ro_files+="/etc/pki/tls/certs/ca-bundle.trust.crt /etc/pki/tls/cert.pem "
-    ro_files+="/etc/hosts /etc/localtime /etc/hostname"
+    ro_files+="/etc/hosts /etc/localtime /etc/hostname "
+    # /etc/openldap is bind mounted with "ro" option in keystone containers.
+    ro_files+="/etc/openldap"
     for ro in $ro_files; do
         if [ -e "$ro" ]; then
             exclude_files+=" --exclude=$ro"
@@ -160,9 +162,9 @@ if [ -z "$NO_ARCHIVE" ]; then
             excluded_original_passwords+=" --exclude=/var/lib/config-data/*${p}"
         fi
     done
-    # We need to exclude the swift ring backups as those change over time and
-    # containers do not need to restart if they change
-    EXCLUDE=--exclude='*/etc/swift/backups/*'\ --exclude='*/etc/libvirt/passwd.db'\ ${excluded_original_passwords}
+    # We need to exclude the swift rings and backups as those change over time
+    # and containers do not need to restart if they change
+    EXCLUDE=--exclude='*/etc/swift/backups/*'\ --exclude='*/etc/swift/*.ring.gz'\ --exclude='*/etc/swift/*.builder'\ --exclude='*/etc/libvirt/passwd.db'\ ${excluded_original_passwords}
 
     # We need to repipe the tar command through 'tar xO' to force text
     # output because otherwise the sed command cannot work. The sed is

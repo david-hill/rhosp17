@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Qpid dispatch router service
@@ -24,9 +24,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -133,6 +130,11 @@ outputs:
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
+      - name: create fcontext entry for qrouterd data
+        community.general.sefcontext:
+          target: "/var/lib/qdrouterd(/.*)?"
+          setype: container_file_t
+          state: present
       - name: create persistent directories
         file:
           path: "{{ item.path }}"

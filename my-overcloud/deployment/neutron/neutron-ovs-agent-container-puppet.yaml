@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Neutron openvswitch service
@@ -28,9 +28,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -144,11 +141,29 @@ parameters:
     type: boolean
     default: false
 
+  NeutronOVSAgentLoggingRateLimit:
+    default: 100
+    description: |
+      Maximum number of packets logging per second
+    type: number
+  NeutronOVSAgentLoggingBurstLimit:
+    default: 25
+    description: |
+      Maximum number of packets per rate_limit
+    type: number
+  NeutronOVSAgentLoggingLocalOutputLogBase:
+    default: ''
+    description: |
+      Output logfile path on agent side, default syslog file
+    type: string
+
 conditions:
   no_firewall_driver: {equals : [{get_param: NeutronOVSFirewallDriver}, '']}
   docker_puppet_mount_host: {equals: [{get_param: DockerPuppetMountHostPuppet}, true]}
   neutron_dvr_unset: {equals : [{get_param: NeutronEnableDVR}, '']}
   ethertypes_unset: {equals : [{get_param: NeutronPermittedEthertypes}, []]}
+  network_log_local_output_log_base_set:
+    not: {equals : [{get_param: NeutronOVSAgentLoggingLocalOutputLogBase}, '']}
 
 resources:
 
@@ -181,7 +196,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -199,6 +213,22 @@ outputs:
         '118 neutron vxlan networks':
           proto: 'udp'
           dport: 4789
+        '120 neutron vxlan networks no conntrack':
+          proto:  'udp'
+          dport:  4789
+          table:  'raw'
+          chain:  'OUTPUT'
+          jump:   'NOTRACK'
+          action: 'append'
+          state: []
+        '121 neutron vxlan networks no conntrack':
+          proto:  'udp'
+          dport:  4789
+          table:  'raw'
+          chain:  'PREROUTING'
+          jump:   'NOTRACK'
+          action: 'append'
+          state: []
         '136 neutron gre networks':
           proto: 'gre'
       monitoring_subscription: {get_param: MonitoringSubscriptionNeutronOvs}
@@ -240,6 +270,11 @@ outputs:
             - ethertypes_unset
             - {}
             - neutron::agents::ml2::ovs::permitted_ethertypes: {get_param: NeutronPermittedEthertypes}
+          - neutron::agents::ml2::ovs::network_log_rate_limit: {get_param: NeutronOVSAgentLoggingRateLimit}
+          - neutron::agents::ml2::ovs::network_log_burst_limit: {get_param: NeutronOVSAgentLoggingBurstLimit}
+          - if:
+            - network_log_local_output_log_base_set
+            - neutron::agents::ml2::ovs::network_log_local_output_log_base: {get_param: NeutronOVSAgentLoggingLocalOutputLogBase}
 
       service_config_settings:
         map_merge:
@@ -312,7 +347,8 @@ outputs:
             pid: host
             user: root
             privileged: true
-            security_opt: 'label=disable'
+            security_opt:
+              - label=disable
             command:
               - puppet
               - apply
@@ -346,7 +382,8 @@ outputs:
             net: host
             pid: host
             privileged: true
-            security_opt: 'label=disable'
+            security_opt:
+              - label=disable
             restart: always
             depends_on:
               - openvswitch.service
@@ -395,8 +432,11 @@ outputs:
               - name: enable virt_sandbox_use_netlink for healthcheck
                 seboolean:
                   name: virt_sandbox_use_netlink
-                  persistent: yes
-                  state: yes
+                  persistent: true
+                  state: true
+                when:
+                  - ansible_facts.selinux is defined
+                  - ansible_facts.selinux.status == "enabled"
       update_tasks:
         # puppetlabs-firewall manages security rules via Puppet but make the rules
         # consistent by default. Since Neutron also creates some rules, we don't

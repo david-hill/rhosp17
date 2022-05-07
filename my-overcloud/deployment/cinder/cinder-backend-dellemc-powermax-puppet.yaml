@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder Dell EMC PowerMax backend
@@ -69,9 +69,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -103,8 +100,6 @@ outputs:
             cinder::backend::dellemc_powermax::powermax_srp: {get_param: CinderPowermaxSrp}
             cinder::backend::dellemc_powermax::powermax_port_groups: {get_param: CinderPowermaxPortGroups}
             cinder::backend::dellemc_powermax::powermax_storage_protocol: {get_param: CinderPowermaxStorageProtocol}
-          -
-            if:
-            - {equals : [{get_param: CinderPowermaxAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderPowermaxAvailabilityZone}, '']}
             - cinder::backend::dellemc_powermax::backend_availability_zone: {get_param: CinderPowermaxAvailabilityZone}

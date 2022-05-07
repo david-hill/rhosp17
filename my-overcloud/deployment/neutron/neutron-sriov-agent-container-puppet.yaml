@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Neutron SR-IOV service
@@ -23,9 +23,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -128,7 +125,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -198,10 +194,12 @@ outputs:
           - - name: enable virt_sandbox_use_netlink for healthcheck
               seboolean:
                 name: virt_sandbox_use_netlink
-                persistent: yes
-                state: yes
-            -
-              if:
+                persistent: true
+                state: true
+              when:
+                - ansible_facts.selinux is defined
+                - ansible_facts.selinux.status == "enabled"
+            - if:
                 - derive_pci_whitelist_enabled
                 - - name: "creating directory"
                     file:
@@ -220,33 +218,4 @@ outputs:
                 - []
       metadata_settings:
         get_attr: [NeutronBase, role_data, metadata_settings]
-      upgrade_tasks:
-        - name: upgrade prepare for leapp to remove extra sriov vfs
-          tags:
-            - never
-            - system_upgrade
-            - system_upgrade_prepare
-          when:
-            - step|int == 3
-            - upgrade_leapp_enabled
-          block:
-            - name: reset all vfs as leapp will look for all interfaces on reboot
-              shell: |
-                for item in $(find /sys/class/net/ -type l); do
-                    DEVPATH="$item/device/sriov_numvfs"
-                    if [ -f $DEVPATH ]; then
-                      NUM_VFS=$(cat $DEVPATH)
-                      if [[ $NUM_VFS != 0 ]]; then
-                        echo 0 >$DEVPATH
-                      fi
-                    fi
-                done
-            - name: remove sriov_config service for leapp upgrade
-              file:
-                path: "/etc/systemd/system/sriov_config.service"
-                state: absent
-              register: sriov_config_remove_result
-            - name: reload systemd daemon after removing sriov_config service
-              systemd:
-                daemon-reload: yes
-              when: sriov_config_remove_result['changed']
+      upgrade_tasks: []

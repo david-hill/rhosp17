@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Heat Engine service
@@ -29,9 +29,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -118,8 +115,8 @@ parameters:
     description: Client retries for transient errors.
 
 conditions:
-  heat_workers_unset: {equals : [{get_param: HeatWorkers}, 0]}
-  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
+  heat_workers_set:
+    not: {equals : [{get_param: HeatWorkers}, 0]}
 
 resources:
 
@@ -135,7 +132,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -180,16 +176,14 @@ outputs:
                 path: /heat
                 query:
                   if:
-                    - enable_sqlalchemy_collectd
-                    -
-                        read_default_file: /etc/my.cnf.d/tripleo.cnf
-                        read_default_group: tripleo
-                        plugin: collectd
-                        collectd_program_name: heat
-                        collectd_host: localhost
-                    -
-                        read_default_file: /etc/my.cnf.d/tripleo.cnf
-                        read_default_group: tripleo
+                    - {get_param: EnableSQLAlchemyCollectd}
+                    - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+                      plugin: collectd
+                      collectd_program_name: heat
+                      collectd_host: localhost
+                    - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
 
             heat::keystone_ec2_uri:
               list_join:
@@ -197,18 +191,10 @@ outputs:
               - - {get_param: [EndpointMap, KeystoneV3Internal, uri]}
                 - '/ec2tokens'
             heat::keystone::domain::domain_password: {get_param: HeatStackDomainAdminPassword}
-            heat::engine::auth_encryption_key:
-              yaql:
-                expression: $.data.passwords.where($ != '').first()
-                data:
-                  passwords:
-                    - {get_param: HeatAuthEncryptionKey}
-                    - {get_param: [DefaultPasswords, heat_auth_encryption_key]}
+            heat::engine::auth_encryption_key: {get_param: HeatAuthEncryptionKey}
             heat::engine::plugin_dirs: {get_param: HeatEnginePluginDirs}
-          -
-            if:
-            - heat_workers_unset
-            - {}
+          - if:
+            - heat_workers_set
             - heat::engine::num_engine_workers: {get_param: HeatWorkers}
       service_config_settings:
         rsyslog:
@@ -217,11 +203,8 @@ outputs:
         mysql:
           heat::db::mysql::password: {get_param: HeatPassword}
           heat::db::mysql::user: heat
-          heat::db::mysql::host: {get_param: [EndpointMap, MysqlInternal, host_nobrackets]}
+          heat::db::mysql::host: '%'
           heat::db::mysql::dbname: heat
-          heat::db::mysql::allowed_hosts:
-            - '%'
-            - "%{hiera('mysql_bind_host')}"
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: heat
@@ -239,15 +222,19 @@ outputs:
             - ' '
             - - /usr/bin/heat-engine --config-file /usr/share/heat/heat-dist.conf --config-file /etc/heat/heat.conf
               - get_attr: [HeatEngineLogging, cmd_extra_args]
-          config_files:
+          config_files: &heat_engine_config_files
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
               preserve_properties: true
-          permissions:
+          permissions: &heat_engine_permissions
             - path: /var/log/heat
               owner: heat:heat
               recurse: true
+        /var/lib/kolla/config_files/heat_engine_db_sync.json:
+          command: "/usr/bin/bootstrap_host_exec heat_engine su heat -s /bin/bash -c 'heat-manage db_sync'"
+          config_files: *heat_engine_config_files
+          permissions: *heat_engine_permissions
       docker_config:
         # db sync runs before permissions set by kolla_config
         step_2:
@@ -263,12 +250,15 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 - {get_attr: [HeatEngineLogging, volumes]}
+                - {get_param: HeatEngineOptVolumes}
                 -
-                  - /var/lib/config-data/heat/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/heat/etc/heat/:/etc/heat/:ro
-            command: "/usr/bin/bootstrap_host_exec heat_engine su heat -s /bin/bash -c 'heat-manage db_sync'"
+                  - /var/lib/kolla/config_files/heat_engine_db_sync.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/heat:/var/lib/kolla/config_files/src:ro
             environment:
-              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
+              map_merge:
+                - {get_param: HeatEngineOptEnvVars}
+                - KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
+                  TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           heat_engine:
             image: *heat_engine_image
@@ -295,8 +285,11 @@ outputs:
           - - name: enable virt_sandbox_use_netlink for healthcheck
               seboolean:
                 name: virt_sandbox_use_netlink
-                persistent: yes
-                state: yes
+                persistent: true
+                state: true
+              when:
+                - ansible_facts.selinux is defined
+                - ansible_facts.selinux.status == "enabled"
       upgrade_tasks: []
       external_upgrade_tasks:
         - when:

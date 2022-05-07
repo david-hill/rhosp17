@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Pacemaker remote service configured with Puppet
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -107,13 +104,7 @@ outputs:
             params:
               $NETWORK: {get_param: [ServiceNetMap, PacemakerRemoteNetwork]}
         pacemaker::corosync::manage_fw: false
-        hacluster_pwd:
-          yaql:
-            expression: $.data.passwords.where($ != '').first()
-            data:
-              passwords:
-                - {get_param: PcsdPassword}
-                - {get_param: [DefaultPasswords, pcsd_password]}
+        hacluster_pwd: {get_param: PcsdPassword}
       service_config_settings:
         rsyslog:
           tripleo_logging_sources_pacemaker_remote:

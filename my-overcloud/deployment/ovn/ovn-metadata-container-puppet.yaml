@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized OVN Metadata agent
@@ -42,9 +42,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   EndpointMap:
     default: {}
@@ -95,16 +92,10 @@ parameters:
   MonitoringSubscriptionOvnMetadata:
     default: 'overcloud-ovn-metadata'
     type: string
-  Debug:
-    type: boolean
-    default: false
-    description: Set to True to enable debugging on all services.
   OvnMetadataAgentDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging for OVN Metadata agent.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   EnableInternalTLS:
     type: boolean
     default: false
@@ -122,13 +113,23 @@ parameters:
     description: Probe interval in ms
     type: number
     default: 60000
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  OvnMetadataCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
   haproxy_wrapper_enabled: {equals: [{get_param: OVNEnableHaproxyDockerWrapper}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
-  service_debug_unset: {equals : [{get_param: OVNWrapperDebug}, false]}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   neutron_metadata_workers_unset: {equals : [{get_param: NeutronMetadataWorkers}, '']}
+  key_size_override_unset: {equals: [{get_param: OvnMetadataCertificateKeySize}, '']}
 
 resources:
 
@@ -141,7 +142,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -165,9 +165,9 @@ outputs:
             tripleo::profile::base::neutron::ovn_metadata_agent_wrappers::haproxy_image: {get_param: ContainerOvnMetadataImage}
             tripleo::profile::base::neutron::ovn_metadata_agent_wrappers::debug:
               if:
-                - service_debug_unset
-                - {get_param: Debug }
                 - {get_param: OVNWrapperDebug}
+                - true
+                - {get_param: Debug}
             tripleo::profile::base::neutron::container_cli: {get_param: ContainerCli}
             neutron::agents::ovn_metadata::shared_secret: {get_param: NeutronMetadataProxySharedSecret}
             neutron::agents::ovn_metadata::auth_password: {get_param: NeutronPassword}
@@ -179,9 +179,9 @@ outputs:
             neutron::agents::ovn_metadata::ovn_remote_probe_interval: {get_param: OVNRemoteProbeInterval}
             neutron::agents::ovn_metadata::debug:
                 if:
-                - service_debug_unset
-                - {get_param: Debug}
                 - {get_param: OvnMetadataAgentDebug}
+                - true
+                - {get_param: Debug}
             neutron::agents::ovn_metadata::metadata_protocol:
               if:
               - internal_tls_enabled
@@ -198,20 +198,6 @@ outputs:
               tripleo::profile::base::neutron::ovn_metadata::protocol: 'ssl'
               tripleo::profile::base::neutron::ovn_metadata::ovn_sb_certificate: '/etc/pki/tls/certs/ovn_metadata.crt'
               tripleo::profile::base::neutron::ovn_metadata::ovn_sb_private_key: '/etc/pki/tls/private/ovn_metadata.key'
-              generate_service_certificates: true
-              ovn_metadata_certificate_specs:
-                service_certificate: '/etc/pki/tls/certs/ovn_metadata.crt'
-                service_key: '/etc/pki/tls/private/ovn_metadata.key'
-                hostname:
-                  str_replace:
-                    template: "%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
-                principal:
-                  str_replace:
-                    template: "ovn_metadata/%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
             - {}
 
       puppet_config:
@@ -299,6 +285,7 @@ outputs:
             image: {get_param: ContainerOvnMetadataImage}
             net: host
             pid: host
+            cgroupns: host
             privileged: true
             restart: always
             healthcheck:
@@ -342,6 +329,33 @@ outputs:
                 network: {get_param: [ServiceNetMap, OvnDbsNetwork]}
                 type: node
             - null
+      deploy_steps_tasks:
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  - name: ovn_metadata
+                    dns:
+                      str_replace:
+                        template: "{{fqdn_$NETWORK}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                    principal:
+                      str_replace:
+                        template: "ovn_metadata/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                    key_size:
+                      if:
+                        - key_size_override_unset
+                        - {get_param: CertificateKeySize}
+                        - {get_param: OvnMetadataCertificateKeySize}
+                    ca: ipa
       host_prep_tasks:
         list_concat:
           - {get_attr: [NeutronLogging, host_prep_tasks]}
@@ -365,9 +379,9 @@ outputs:
                 haproxy_wrapper_enabled: {get_param: OVNEnableHaproxyDockerWrapper}
                 debug_enabled:
                   if:
-                    - service_debug_unset
-                    - {get_param: Debug }
-                    - {get_param: NeutronWrapperDebug}
+                    - {get_param: OVNWrapperDebug}
+                    - true
+                    - {get_param: Debug}
                 docker_additional_sockets: {get_param: DockerAdditionalSockets}
             - name: create kill_scripts directory within /var/lib/neutron
               file:

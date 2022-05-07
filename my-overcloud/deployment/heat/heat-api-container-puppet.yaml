@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Heat API service
@@ -30,9 +30,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -80,9 +77,8 @@ parameters:
     hidden: true
 
 conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  heat_workers_zero: {equals : [{get_param: HeatWorkers}, 0]}
+  heat_workers_set:
+    not: {equals : [{get_param: HeatWorkers}, 0]}
 
 resources:
 
@@ -94,7 +90,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -106,7 +101,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -177,11 +171,9 @@ outputs:
                   "%{hiera('fqdn_$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, HeatApiNetwork]}
-          -
-            if:
-            - heat_workers_zero
-            - {}
-            - heat::wsgi::apache_api::workers: {get_param: HeatWorkers}
+          - if:
+              - heat_workers_set
+              - heat::wsgi::apache_api::workers: {get_param: HeatWorkers}
       service_config_settings:
         rsyslog:
           tripleo_logging_sources_heat_api:
@@ -189,7 +181,7 @@ outputs:
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: heat_api
-        puppet_tags: heat_config,file,concat,file_line
+        puppet_tags: heat_config,file,concat,file_line,heat_api_paste_ini
         step_config: |
           include tripleo::profile::base::heat::api
         config_image: {get_param: ContainerHeatApiConfigImage}
@@ -203,9 +195,6 @@ outputs:
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
               dest: "/etc/httpd/conf.modules.d"
-              # TODO(emilien) remove optional flag once we get a promotion
-              # https://launchpad.net/bugs/1884115
-              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -246,17 +235,12 @@ outputs:
                 - {get_attr: [ContainersCommon, volumes]}
                 - {get_attr: [HeatApiLogging, volumes]}
                 - {get_param: HeatApiOptVolumes}
-                -
-                  - /var/lib/kolla/config_files/heat_api.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/heat_api.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/heat_api:/var/lib/kolla/config_files/src:ro
                 - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                    - []
-                - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                    - []
+                  - {get_param: EnableInternalTLS}
+                  - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
             environment:
               map_merge:
                 - {get_param: HeatApiOptEnvVars}
@@ -282,6 +266,8 @@ outputs:
       upgrade_tasks: []
       metadata_settings:
         get_attr: [ApacheServiceBase, role_data, metadata_settings]
+      deploy_steps_tasks:
+        get_attr: [ApacheServiceBase, role_data, deploy_steps_tasks]
       external_upgrade_tasks:
         - when:
             - step|int == 1

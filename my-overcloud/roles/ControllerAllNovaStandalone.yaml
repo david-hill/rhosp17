@@ -22,6 +22,8 @@
       subnet: tenant_subnet
   default_route_networks: ['External']
   HostnameFormatDefault: '%stackname%-controller-%index%'
+  RoleParametersDefault:
+    OVNCMSOptions: "enable-chassis-as-gw"
   update_serial: 1
   ServicesDefault:
     - OS::TripleO::Services::AodhApi
@@ -35,13 +37,13 @@
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::CeilometerAgentCentral
     - OS::TripleO::Services::CeilometerAgentNotification
+    - OS::TripleO::Services::CephClient
     - OS::TripleO::Services::CephExternal
     - OS::TripleO::Services::CephMds
     - OS::TripleO::Services::CephMgr
     - OS::TripleO::Services::CephMon
     - OS::TripleO::Services::CephRbdMirror
     - OS::TripleO::Services::CephRgw
-    - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::CinderApi
     - OS::TripleO::Services::CinderBackup
     - OS::TripleO::Services::CinderHPELeftHandISCSI
@@ -55,7 +57,9 @@
     - OS::TripleO::Services::DesignateWorker
     - OS::TripleO::Services::DesignateMDNS
     - OS::TripleO::Services::DesignateSink
+    - OS::TripleO::Services::DesignateBind
     - OS::TripleO::Services::Etcd
+    - OS::TripleO::Services::Frr
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::GlanceApi
@@ -86,10 +90,6 @@
     - OS::TripleO::Services::ManilaScheduler
     - OS::TripleO::Services::ManilaShare
     - OS::TripleO::Services::Memcached
-    - OS::TripleO::Services::MistralApi
-    - OS::TripleO::Services::MistralEngine
-    - OS::TripleO::Services::MistralExecutor
-    - OS::TripleO::Services::MistralEventEngine
     - OS::TripleO::Services::Multipathd
     - OS::TripleO::Services::MySQLClient
     - OS::TripleO::Services::NeutronApi
@@ -106,12 +106,11 @@
     - OS::TripleO::Services::OVNController
     - OS::TripleO::Services::Pacemaker
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Redis
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar
-    - OS::TripleO::Services::SaharaApi
-    - OS::TripleO::Services::SaharaEngine
     - OS::TripleO::Services::Snmp
     - OS::TripleO::Services::Sshd
     - OS::TripleO::Services::SwiftProxy
@@ -123,5 +122,5 @@
     - OS::TripleO::Services::TripleoFirewall
     - OS::TripleO::Services::TripleoPackages
     - OS::TripleO::Services::Tuned
+    - OS::TripleO::Services::Unbound
     - OS::TripleO::Services::Vpp
-    - OS::TripleO::Services::Zaqar

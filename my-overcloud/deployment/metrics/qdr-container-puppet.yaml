@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Qpid dispatch router service for metrics and monitoring purposes
@@ -20,9 +20,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -43,8 +40,8 @@ parameters:
     type: json
     default:
       tag: openstack.nova.consoleauth
-      file: /var/log/containers/qdrouterd/metrics_qdr.log
-      startmsg.regex: "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(.[0-9]+ \\+[0-9]+)? [A-Z]+ \\([a-z]+\\) "
+      file: /var/log/containers/metrics_qdr/metrics_qdr.log
+      startmsg.regex: '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(.[0-9]+ \\+[0-9]+)? [A-Z]+ \\([a-z]+\\) '
   MetricsQdrPort:
     default: 5666
     description: Service name or port number on which the qdrouterd will accept
@@ -66,7 +63,8 @@ parameters:
     description: Connectors configuration (array of hashes).
     type: json
   MetricsQdrSSLProfiles:
-    default: []
+    default:
+      - name: sslProfile
     description: SSL Profiles for the connectors (array of hashes).
     type: json
   MetricsQdrAddresses:
@@ -85,13 +83,13 @@ parameters:
     type: json
   MetricsQdrUseSSL:
     default: false
-    description: Set to true if it is required to use SSL or TLS on
-                 the connection for listener.
+    description: Set to true if it is required to use SSL or TLS on the connection for
+      the local listener. !WARNING! Currently breaks connections from collectd and ceilometer.
     type: boolean
   MetricsQdrUseEncryption:
     default: false
-    description: Set to true if it is required to encrypt connection to the peer
-                 for listener.
+    description: Set to true if it is required to encrypt connection to the peer for
+      listener. Not currently implemented, use EnableInternalTLS instead. This option can be ignored.
     type: boolean
   MetricsQdrSaslMechanisms:
     default: 'ANONYMOUS'
@@ -99,15 +97,15 @@ parameters:
                  of comma separated list.
     type: string
   MetricsQdrSslCertDb:
-    default: ''
+    default: '/etc/ipa/ca.crt'
     description: Path to SSL certificate db for listener.
     type: string
   MetricsQdrSslCertFile:
-    default: ''
+    default: '/etc/pki/tls/certs/metrics_qdr.crt'
     description: Path to SSL certificate file for listener.
     type: string
   MetricsQdrSslKeyFile:
-    default: ''
+    default: '/etc/pki/tls/private/metrics_qdr.key'
     description: Path to SSL private key file for listener.
     type: string
   MetricsQdrSslPwFile:
@@ -123,14 +121,13 @@ parameters:
     description: Path to file containing trusted certificates for listener.
     type: string
   MetricsQdrAuthenticateClient:
-    default: 'no'
+    default: false
     description: Authenticate the client using SSL/TLS
-    type: string
+    type: boolean
   MetricsQdrExternalEndpoint:
     default: false
-    description: |
-      Whether QDR should listen on external network interface. To enable listening
-      on external network one must deploy QDRs in mesh mode.
+    description: Whether QDR should listen on external network interface. To enable
+      listening on external network one must deploy QDRs in mesh mode.
     type: boolean
   InternalTLSCAFile:
     default: '/etc/ipa/ca.crt'
@@ -144,10 +141,22 @@ parameters:
     default: false
     description: Set to true to enable configuration for STF client.
     type: boolean
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  QdrCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  listener_ssl_enabled: {equals: [{get_param: MetricsQdrUseSSL}, true]}
   enable_stf: {equals: [{get_param: EnableSTF}, true]}
+  key_size_override_unset: {equals: [{get_param: QdrCertificateKeySize}, '']}
 
 
 resources:
@@ -201,7 +210,11 @@ outputs:
             tripleo::profile::base::metrics::qdr::addresses: {get_param: MetricsQdrAddresses}
             tripleo::profile::base::metrics::qdr::autolink_addresses: {get_param: MetricsQdrAutoLinks}
             # ssl support
-            tripleo::profile::base::metrics::qdr::listener_require_ssl: {get_param: MetricsQdrUseSSL}
+            tripleo::profile::base::metrics::qdr::listener_require_ssl:
+              if:
+                - listener_ssl_enabled
+                - true
+                - false
             tripleo::profile::base::metrics::qdr::listener_require_encrypt: {get_param: MetricsQdrUseEncryption}
             tripleo::profile::base::metrics::qdr::listener_sasl_mech: {get_param: MetricsQdrSaslMechanisms}
             tripleo::profile::base::metrics::qdr::listener_ssl_cert_db: {get_param: MetricsQdrSslCertDb}
@@ -215,35 +228,7 @@ outputs:
             qdr::listener_auth_peer: {get_param: MetricsQdrAuthenticateClient}
           - if:
             - internal_tls_enabled
-            - generate_service_certificates: true
-              tripleo::metrics::qdr::service_certificate: '/etc/pki/tls/certs/metrics_qdr.crt'
-              tripleo::metrics::qdr::service_key: '/etc/pki/tls/private/metrics_qdr.key'
-              tripleo::profile::base::metrics::qdr::certificate_specs:
-                service_certificate: '/etc/pki/tls/certs/metrics_qdr.crt'
-                service_key: '/etc/pki/tls/private/metrics_qdr.key'
-                postsave_cmd: "/usr/bin/certmonger-metrics-qdr-refresh.sh"
-                hostname:
-                  str_replace:
-                    template: "%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK:
-                        get_param:
-                          - ServiceNetMap
-                          - str_replace:
-                              template: "ROLENAMEMetricsQdrNetwork"
-                              params:
-                                ROLENAME: {get_param: RoleName}
-                principal:
-                  str_replace:
-                    template: "metrics_qdr/%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK:
-                        get_param:
-                          - ServiceNetMap
-                          - str_replace:
-                              template: "ROLENAMEMetricsQdrNetwork"
-                              params:
-                                ROLENAME: {get_param: RoleName}
+            -
               tripleo::profile::base::metrics::qdr::ssl_profiles:
                 list_concat:
                   - get_param: MetricsQdrSSLProfiles
@@ -333,14 +318,61 @@ outputs:
                   - internal_tls_enabled
                   - - /etc/pki/tls/certs/metrics_qdr.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/metrics_qdr.crt:ro
                     - /etc/pki/tls/private/metrics_qdr.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/metrics_qdr.key:ro
-                    - list_join:
-                      - ':'
-                      - - {get_param: InternalTLSCAFile}
-                        - {get_param: InternalTLSCAFile}
-                        - 'ro'
                   - null
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
+      deploy_steps_tasks:
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  - name: metrics_qdr
+                    dns:
+                      str_replace:
+                        template: "{{fqdn_NETWORK}}"
+                        params:
+                          NETWORK:
+                            get_param:
+                              - ServiceNetMap
+                              - str_replace:
+                                  template: "ROLENAMEMetricsQdrNetwork"
+                                  params:
+                                    ROLENAME: {get_param: RoleName}
+                    principal:
+                      str_replace:
+                        template: "metrics_qdr/{{fqdn_NETWORK}}@{{idm_realm}}"
+                        params:
+                          NETWORK:
+                            get_param:
+                              - ServiceNetMap
+                              - str_replace:
+                                  template: "ROLENAMEMetricsQdrNetwork"
+                                  params:
+                                    ROLENAME: {get_param: RoleName}
+                    run_after: |
+                      container_name=$({{container_cli}} ps --format=\{\{.Names\}\} | grep metrics_qdr)
+                      service_crt="/etc/pki/tls/certs/metrics_qdr.crt"
+                      service_key="/etc/pki/tls/private/metrics_qdr.key
+                      # Copy the new cert from the mount-point to the real path
+                      {{container_cli}} exec "$container_name" cp "/var/lib/kolla/config_files/src-tls$service_crt" "$service_crt"
+                      # Copy the new key from the mount-point to the real path
+                      {{container_cli}} exec "$container_name" cp "/var/lib/kolla/config_files/src-tls$service_key" "$service_key"
+                      # Set appropriate permissions
+                      {{container_cli}} exec "$container_name" chown qdrouterd:qdrouterd "$service_crt"
+                      {{container_cli}} exec "$container_name" chown qdrouterd:qdrouterd "$service_key"
+                      # Trigger a container restart to read the new certificate
+                      {{container_cli}} restart "$container_name"
+                    key_size:
+                      if:
+                        - key_size_override_unset
+                        - {get_param: CertificateKeySize}
+                        - {get_param: QdrCertificateKeySize}
+                    ca: ipa
       host_prep_tasks:
         - name: create persistent logs directory
           file:

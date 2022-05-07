@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder Dell EMC Unity backend
@@ -56,9 +56,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -88,8 +85,6 @@ outputs:
             cinder::backend::dellemc_unity::storage_protocol: {get_param: CinderDellEMCUnityStorageProtocol}
             cinder::backend::dellemc_unity::unity_io_ports: {get_param: CinderDellEMCUnityIoPorts}
             cinder::backend::dellemc_unity::unity_storage_pool_names: {get_param: CinderDellEMCUnityStoragePoolNames}
-          -
-            if:
-            - {equals : [{get_param: CinderDellEMCUnityAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderDellEMCUnityAvailabilityZone}, '']}
             - cinder::backend::dellemc_unity::backend_availability_zone: {get_param: CinderDellEMCUnityAvailabilityZone}

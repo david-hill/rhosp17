@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder NVMeOF backend
@@ -41,9 +41,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -79,8 +76,6 @@ outputs:
                   "%{hiera('$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, CinderIscsiNetwork]}
-          -
-            if:
-            - {equals : [{get_param: CinderNVMeOFAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderNVMeOFAvailabilityZone}, '']}
             - tripleo::profile::base::cinder::volume::nvmeof::backend_availability_zone: {get_param: CinderNVMeOFAvailabilityZone}

@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Utility stack to convert an array of services into a set of combined
@@ -25,11 +25,6 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
-  DefaultPasswords:
-    default: {}
-    description: Mapping of service -> default password. Used to help
-                 pass top level passwords managed by Heat into services.
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -50,7 +45,6 @@ resources:
         ServiceData: {get_param: ServiceData}
         ServiceNetMap: {get_param: ServiceNetMap}
         EndpointMap: {get_param: EndpointMap}
-        DefaultPasswords: {get_param: DefaultPasswords}
         RoleName: {get_param: RoleName}
         RoleParameters: {get_param: RoleParameters}
 
@@ -105,7 +99,7 @@ resources:
       type: comma_delimited_list
       value:
         yaql:
-          expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('monitoring_subscription')).where($ != null))
+          expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('monitoring_subscription')).where($ != null)).flatten()
           data: {role_data: {get_attr: [ServiceChain, role_data]}}
 
   ServiceNames:
@@ -124,7 +118,7 @@ resources:
       value:
         map_merge:
           yaql:
-            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('global_config_settings')).where($ != null))
+            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('global_config_settings')).where($ != null)).flatten()
             data: {role_data: {get_attr: [ServiceChain, role_data]}}
 
   KeystoneResourcesConfigs:
@@ -134,7 +128,7 @@ resources:
       value:
         map_merge:
           yaql:
-            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('keystone_resources')).where($ != null))
+            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('keystone_resources')).where($ != null)).flatten()
             data: {role_data: {get_attr: [ServiceChain, role_data]}}
 
   ServiceConfigSettings:
@@ -317,6 +311,16 @@ resources:
           expression: coalesce($.data, []).where($ != null).select($.get('host_prep_tasks')).where($ != null).flatten().distinct()
           data: {get_attr: [ServiceChain, role_data]}
 
+  PreDeployStepTasks:
+    type: OS::Heat::Value
+    properties:
+      type: comma_delimited_list
+      value:
+        yaql:
+          # Note we use distinct() here to filter any identical tasks
+          expression: coalesce($.data, []).where($ != null).select($.get('pre_deploy_step_tasks')).where($ != null).flatten().distinct()
+          data: {get_attr: [ServiceChain, role_data]}
+
   AnsibleGroupVars:
     type: OS::Heat::Value
     properties:
@@ -324,7 +328,7 @@ resources:
       value:
         map_merge:
           yaql:
-            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('ansible_group_vars')).where($ != null))
+            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('ansible_group_vars')).where($ != null)).flatten()
             data: {role_data: {get_attr: [ServiceChain, role_data]}}
 
   FirewallRules:
@@ -334,7 +338,7 @@ resources:
       value:
         map_merge:
           yaql:
-            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('firewall_rules')).where($ != null))
+            expression: list(coalesce($.data.role_data, []).where($ != null).select($.get('firewall_rules')).where($ != null)).flatten()
             data: {role_data: {get_attr: [ServiceChain, role_data]}}
 
 
@@ -387,3 +391,4 @@ outputs:
               vars:
                 tripleo_firewall_rules: {get_attr: [FirewallRules, value]}
           - {get_attr: [HostPrepTasks, value]}
+      pre_deploy_step_tasks: {get_attr: [PreDeployStepTasks, value]}

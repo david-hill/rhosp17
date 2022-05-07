@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Iscsid service
@@ -33,9 +33,6 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   LVMFilterEnabled:
     default: false
     description: Enables configuration of LVM2 with a filter so that devices not
@@ -64,9 +61,13 @@ parameters:
     type: comma_delimited_list
     tags:
       - role_specific
+  IscsidCHAPAlgorithms:
+    default: 'SHA3-256,SHA256,SHA1,MD5'
+    description: A comma separated list of algorithms to be used for the CHAP
+                 algorithm.
+    type: string
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -91,7 +92,8 @@ outputs:
     description: Role data for the Iscsid role.
     value:
       service_name: iscsid
-      config_settings: {}
+      config_settings:
+        tripleo::profile::base::iscsid::chap_algs: {get_param: IscsidCHAPAlgorithms}
       service_config_settings: {}
       deploy_steps_tasks:
       - name: Run lvmfilter role
@@ -113,12 +115,16 @@ outputs:
           # However, overcloud nodes must have a unique IQN. Allow full
           # (write) access to /etc/iscsi so that puppet ensures the IQN
           # is unique and is reset once, and only once.
-          - /etc/iscsi:/etc/iscsi:z
+          # NOTE(abishop) The host directory is mounted at /tmp/iscsi.host
+          # to allow puppet to manage its own files, but still be able to
+          # sync with the host. See I89023603147e21d5c211041f70fc2c988d5f4de1
+          # for details.
+          - /etc/iscsi:/tmp/iscsi.host:z
       kolla_config:
         /var/lib/kolla/config_files/iscsid.json:
           command: /usr/sbin/iscsid -f
           config_files:
-            - source: "/var/lib/kolla/config_files/src-iscsid/*"
+            - source: "/var/lib/kolla/config_files/src-iscsid/"
               dest: "/etc/iscsi/"
               merge: true
               preserve_properties: true
@@ -135,27 +141,35 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/iscsid.json:/var/lib/kolla/config_files/config.json:ro
-                  - /dev/:/dev/
-                  - /run/:/run/
+                - - /var/lib/kolla/config_files/iscsid.json:/var/lib/kolla/config_files/config.json:ro
+                  - /dev:/dev
+                  - /run:/run
                   - /sys:/sys
                   - /lib/modules:/lib/modules:ro
-                  - /etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
+                  - /var/lib/config-data/puppet-generated/iscsid/etc/iscsi:/var/lib/kolla/config_files/src-iscsid:ro
+                  - /etc/target:/etc/target:z
                   - /var/lib/iscsi:/var/lib/iscsi:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
-        - name: ensure /etc/iscsi exists
+        - name: create fcontext entry for iscsi
+          community.general.sefcontext:
+            target: "{{ item.path }}(/.*)?"
+            setype: "{{ item.setype }}"
+            state: present
+          with_items:
+            - { 'path': /etc/iscsi, 'setype': container_file_t }
+            - { 'path': /etc/target, 'setype': container_file_t }
+            - { 'path': /var/lib/iscsi, 'setype': container_file_t }
+        - name: create persistent directories
           file:
-            path: /etc/iscsi
+            path: "{{ item.path }}"
             state: directory
-            setype: container_file_t
-        - name: ensure /var/lib/iscsi exists
-          file:
-            path: /var/lib/iscsi
-            state: directory
-            setype: container_file_t
+            setype: "{{ item.setype }}"
+          with_items:
+            - { 'path': /etc/iscsi, 'setype': container_file_t }
+            - { 'path': /etc/target, 'setype': container_file_t }
+            - { 'path': /var/lib/iscsi, 'setype': container_file_t }
         - name: stat /lib/systemd/system/iscsid.socket
           stat: path=/lib/systemd/system/iscsid.socket
           register: stat_iscsid_socket

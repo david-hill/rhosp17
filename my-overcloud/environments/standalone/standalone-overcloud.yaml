@@ -51,8 +51,6 @@ parameter_defaults:
   SwiftReplicas: 1
 
 resource_registry:
-  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
-  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -71,6 +69,7 @@ resource_registry:
   OS::TripleO::Services::DesignateProducer: OS::Heat::None
   OS::TripleO::Services::DesignateSink: OS::Heat::None
   OS::TripleO::Services::DesignateWorker: OS::Heat::None
+  OS::TripleO::Services::DesignateBind: OS::Heat::None
   OS::TripleO::Services::GnocchiApi: OS::Heat::None
   OS::TripleO::Services::GnocchiMetricd: OS::Heat::None
   OS::TripleO::Services::GnocchiStatsd: OS::Heat::None
@@ -93,11 +92,4 @@ resource_registry:
   OS::TripleO::Services::ManilaBackendVNX: OS::Heat::None
   OS::TripleO::Services::ManilaScheduler: OS::Heat::None
   OS::TripleO::Services::ManilaShare: OS::Heat::None
-  OS::TripleO::Services::MistralApi: OS::Heat::None
-  OS::TripleO::Services::MistralEngine: OS::Heat::None
-  OS::TripleO::Services::MistralEventEngine: OS::Heat::None
-  OS::TripleO::Services::MistralExecutor: OS::Heat::None
   OS::TripleO::Services::OpenStackClients: ../../deployment/clients/openstack-clients-baremetal-ansible.yaml
-  OS::TripleO::Services::SaharaApi: OS::Heat::None
-  OS::TripleO::Services::SaharaEngine: OS::Heat::None
-  OS::TripleO::Services::Zaqar: OS::Heat::None

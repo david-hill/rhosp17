@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: Enrolls the undercloud with the IPA server for TLS-e deployments
 
@@ -15,9 +15,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -50,11 +47,14 @@ outputs:
         # openssl-perl is installed which provides /etc/pki/CA on RHEL8
         - name: Ensure openssl-perl package is present on RHEL8
           when:
-            - ansible_os_family == 'RedHat'
-            - ansible_distribution_major_version == '8'
+            - ansible_facts['os_family'] == 'RedHat'
+            - ansible_facts['distribution_major_version'] is version('8', '==')
           package:
             name: openssl-perl
             state: present
+        - name: Ensure ansible_fqdn is defined
+          set_fact:
+            ansible_fqdn: "{{ ansible_facts['fqdn'] }}"
         - name: Create tripleo-admin user and group
           include_role:
             name: tripleo_create_admin
@@ -68,12 +68,12 @@ outputs:
             name: ipaclient
           vars:
             ipaclient_otp: "{{ ipa_otp }}"
+            ipaclient_hostname: "{{ fqdn_canonical }}"
           when: ipa_otp != ''
         - name: Set keytab permission facts
           set_fact:
-            nova_service: "nova/{{ ansible_nodename }}"
+            nova_service: "nova/{{ ansible_facts['nodename'] }}"
             nova_keytab: "/etc/novajoin/krb5.keytab"
-            nova_keytab_group: "tripleo-admin"
         - name: Add directory for keytab
           file:
             path: "/etc/novajoin"
@@ -91,5 +91,5 @@ outputs:
         - name: Set permissions on keytab
           file:
             path: "{{ nova_keytab }}"
-            group: "{{ nova_keytab_group }}"
+            group: "root"
             mode: "g+r"

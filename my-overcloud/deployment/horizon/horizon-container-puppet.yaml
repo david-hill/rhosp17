@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Horizon service
@@ -25,9 +25,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -43,9 +40,7 @@ parameters:
   HorizonDebug:
     default: false
     description: Set to True to enable debugging Horizon service.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   HorizonAllowedHosts:
     default: '*'
     description: A list of IP/Hostname for the server Horizon is running on.
@@ -154,9 +149,6 @@ parameter_groups:
   - MemcachedIPv6
 
 conditions:
-  debug_unset: {equals : [{get_param: Debug}, '']}
-  websso_enabled: {equals : [{get_param: WebSSOEnable}, True]}
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   horizon_domain_choices_set: {not: {equals: [{get_param: HorizonDomainChoices}, []]}}
   is_ipv6:
     equals:
@@ -164,12 +156,8 @@ conditions:
       - 6
   horizon_logger_debug:
     or:
-    - yaql:
-        expression: $.data.horizon_debug.matches("true|True|TRUE")
-        data:
-          horizon_debug:
-            get_param: HorizonDebug
-    - get_param: Debug
+      - {get_param: Debug}
+      - {get_param: HorizonDebug}
 
 resources:
 
@@ -206,13 +194,7 @@ outputs:
           horizon::keystone_url: {get_param: [EndpointMap, KeystoneV3Public, uri]}
           horizon::password_validator: {get_param: [HorizonPasswordValidator]}
           horizon::password_validator_help: {get_param: [HorizonPasswordValidatorHelp]}
-          horizon::secret_key:
-            yaql:
-              expression: $.data.passwords.where($ != '').first()
-              data:
-                passwords:
-                  - {get_param: HorizonSecret}
-                  - {get_param: [DefaultPasswords, horizon_secret]}
+          horizon::secret_key: {get_param: HorizonSecret}
           horizon::secure_cookies: {get_param: [HorizonSecureCookies]}
           horizon::session_timeout: {get_param: HorizonSessionTimeout}
           memcached_ipv6: {if: [is_ipv6, true, false]}
@@ -227,38 +209,33 @@ outputs:
           horizon::timezone: {get_param: TimeZone}
           horizon::file_upload_temp_dir: '/var/tmp'
           horizon::help_url: {get_param: HorizonHelpURL}
-        -
-          if:
-          - internal_tls_enabled
+          # NOTE(tkajinam): The heat-dashboard parmaeters are now defined in an independent file,
+          #                 so should be removed from the base local_settings.
+          horizon::enable_user_pass: 'UNSET'
+        - if:
+          - {get_param: EnableInternalTLS}
           - horizon::horizon_ca: {get_param: InternalTLSCAFile}
-            horizon::ssl_verify_client: true
-          - {}
-        -
-          if:
-          - websso_enabled
-          -
-              horizon::websso_enabled:
-                get_param: WebSSOEnable
-              horizon::websso_initial_choice:
-                get_param: WebSSOInitialChoice
-              horizon::websso_choices:
-                get_param: WebSSOChoices
-              horizon::websso_idp_mapping:
-                get_param: WebSSOIDPMapping
-          - {}
-        -
-          if:
-          - debug_unset
-          - horizon::django_debug: { get_param: HorizonDebug }
-          - horizon::django_debug: { get_param: Debug }
+            horizon::ssl_verify_client: require
+        - if:
+          - {get_param: WebSSOEnable}
+          - horizon::websso_enabled:
+              get_param: WebSSOEnable
+            horizon::websso_initial_choice:
+              get_param: WebSSOInitialChoice
+            horizon::websso_choices:
+              get_param: WebSSOChoices
+            horizon::websso_idp_mapping:
+              get_param: WebSSOIDPMapping
+        - if:
+          - {get_param: HorizonDebug}
+          - horizon::django_debug: true
+          - horizon::django_debug: {get_param: Debug}
         - if:
           - horizon_logger_debug
           - horizon::log_level: 'DEBUG'
-          - {}
         - if:
           - horizon_domain_choices_set
           - horizon::keystone_domain_choices: {get_param: HorizonDomainChoices}
-          - {}
       ansible_group_vars:
         keystone_enable_member: true
       service_config_settings:
@@ -286,9 +263,6 @@ outputs:
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
               dest: "/etc/httpd/conf.modules.d"
-              # TODO(emilien) remove optional flag once we get a promotion
-              # https://launchpad.net/bugs/1884115
-              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -340,46 +314,22 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/horizon.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/horizon.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/horizon:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/horizon:/var/log/horizon:z
                   - /var/log/containers/httpd/horizon:/var/log/httpd:z
-                  - /var/tmp/:/var/tmp/:z
-                  - /var/www/:/var/www/:ro
+                  - /var/tmp/horizon:/var/tmp:z
+                  - /var/www:/var/www:ro
                 - if:
-                    - internal_tls_enabled
+                    - {get_param: EnableInternalTLS}
                     - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                    - []
-                - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                    - []
+                      - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
-              # Installed plugins:
-              ENABLE_CLOUDKITTY: 'no'
-              ENABLE_IRONIC: 'yes'
-              ENABLE_MAGNUM: 'no'
-              ENABLE_MANILA: 'yes'
               ENABLE_HEAT: 'yes'
-              ENABLE_MURANO: 'no'
-              ENABLE_MISTRAL: 'no'
+              ENABLE_IRONIC: 'yes'
+              ENABLE_MANILA: 'yes'
               ENABLE_OCTAVIA: 'yes'
-              ENABLE_SAHARA: 'yes'
-              ENABLE_TROVE: 'no'
-              # Not installed:
-              ENABLE_FREEZER: 'no'
-              ENABLE_FWAAS: 'no'
-              ENABLE_KARBOR: 'no'
-              ENABLE_DESIGNATE: 'no'
-              ENABLE_SEARCHLIGHT: 'no'
-              ENABLE_SENLIN: 'no'
-              ENABLE_SOLUM: 'no'
-              ENABLE_TACKER: 'no'
-              ENABLE_WATCHER: 'no'
-              ENABLE_ZAQAR: 'no'
-              ENABLE_ZUN: 'no'
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -391,7 +341,26 @@ outputs:
             - { 'path': /var/log/containers/horizon, 'setype': container_file_t, 'mode': '0750' }
             - { 'path': /var/log/containers/httpd/horizon, 'setype': container_file_t, 'mode': '0750' }
             - { 'path': /var/www, 'setype': container_file_t }
-      upgrade_tasks: []
+            - { 'path': /var/tmp/horizon, 'setype': container_file_t, 'mode': '1777' }
+        - name: ensure /var/tmp/horizon exists on boot
+          copy:
+            dest: /etc/tmpfiles.d/var-tmp-horizon.conf
+            content: |
+              d /var/tmp/horizon 1777 root root - -
+      upgrade_tasks:
+        - name: Anchor for upgrade and update tasks
+          when: step|int == 0
+          block: &tmp_reset_label
+            - name: Reset selinux label on /var/tmp
+              file:
+                path: /var/tmp
+                state: directory
+                setype: tmp_t
+                mode: 1777
+      update_tasks:
+        - name: Anchor for upgrade and update tasks
+          when: step|int == 0
+          block: *tmp_reset_label
       external_upgrade_tasks:
         - when:
             - step|int == 1

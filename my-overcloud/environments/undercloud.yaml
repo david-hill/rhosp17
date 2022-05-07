@@ -1,11 +1,5 @@
-parameter_merge_strategies:
-  default: overwrite
-  UndercloudExtraConfig: deep_merge
-
 resource_registry:
   OS::TripleO::Services::Tmpwatch: ../deployment/logrotate/tmpwatch-install.yaml
-  OS::TripleO::Network::Ports::RedisVipPort: ../network/ports/noop.yaml
-  OS::TripleO::Network::Ports::OVNDBsVipPort: ../network/ports/noop.yaml
   OS::TripleO::Network::Ports::ControlPlaneVipPort: ../deployed-server/deployed-neutron-port.yaml
   OS::TripleO::NodeExtraConfigPost: ../extraconfig/post_deploy/undercloud_post.yaml
   OS::TripleO::Services::DockerRegistry: ../deployment/image-serve/image-serve-baremetal-ansible.yaml
@@ -21,6 +15,8 @@ resource_registry:
   OS::TripleO::Services::NeutronMl2PluginBase: ../deployment/neutron/neutron-plugin-ml2.yaml
 
   OS::TripleO::Services::OpenStackClients: ../deployment/clients/openstack-clients-baremetal-ansible.yaml
+
+  OS::TripleO::Services::HeatEphemeral: ../deployment/heat/heat-ephemeral-container-ansible.yaml
 
   # services we disable by default on the undercloud
   OS::TripleO::Services::AodhApi: OS::Heat::None
@@ -38,7 +34,12 @@ resource_registry:
   OS::TripleO::Services::CinderApi: OS::Heat::None
   OS::TripleO::Services::CinderScheduler: OS::Heat::None
   OS::TripleO::Services::CinderVolume: OS::Heat::None
+  # Disable traditional heat services now that ephemeral heat
+  # is deployed by default
+  OS::TripleO::Services::HeatApi: OS::Heat::None
   OS::TripleO::Services::HeatApiCfn: OS::Heat::None
+  OS::TripleO::Services::HeatApiCloudwatch: OS::Heat::None
+  OS::TripleO::Services::HeatEngine: OS::Heat::None
   OS::TripleO::Services::NovaApi: OS::Heat::None
   OS::TripleO::Services::NovaConductor: OS::Heat::None
   OS::TripleO::Services::NovaIronic: OS::Heat::None
@@ -48,6 +49,9 @@ resource_registry:
   OS::TripleO::Services::Logging::PlacementApi: OS::Heat::None
   OS::TripleO::Services::GlanceApi: OS::Heat::None
   OS::TripleO::Services::NeutronMetadataAgent: OS::Heat::None
+  OS::TripleO::Services::SwiftProxy: OS::Heat::None
+  OS::TripleO::Services::SwiftStorage: OS::Heat::None
+  OS::TripleO::Services::SwiftRingBuilder: OS::Heat::None
 
   # Services we don't ever want configured. See LP#1824030
   OS::TripleO::Services::Pacemaker: OS::Heat::None
@@ -71,10 +75,6 @@ resource_registry:
   # Undercloud HA services
   OS::TripleO::Services::HAproxy: OS::Heat::None
 
-  # Don't create OVN Chassis MAC address nets/ports on the undercloud
-  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
-  OS::TripleO::OVNMacAddressPort: OS::Heat::None
-
 parameter_defaults:
   # ensure we enable ip_forward before docker gets run
   KernelIpForward: 1
@@ -86,7 +86,7 @@ parameter_defaults:
   TokenExpiration: 14400
   EnablePackageInstall: true
   StackAction: CREATE
-  SoftwareConfigTransport: POLL_SERVER_HEAT
+  UndercloudNetworkConfigUpdate: True 
   NeutronTunnelTypes: []
   NeutronBridgeMappings: ctlplane:br-ctlplane
   NeutronAgentExtensions: []
@@ -112,7 +112,7 @@ parameter_defaults:
   IronicEnabledHardwareTypes: ['ipmi', 'redfish', 'idrac', 'ilo']
   IronicEnabledBootInterfaces: ['pxe', 'ilo-pxe']
   IronicEnabledConsoleInterfaces: ['ipmitool-socat', 'ilo', 'no-console']
-  IronicEnabledDeployInterfaces: ['iscsi', 'direct', 'ansible']
+  IronicEnabledDeployInterfaces: ['direct', 'ansible']
   IronicEnabledInspectInterfaces: ['inspector', 'no-inspect']
   IronicEnabledManagementInterfaces: ['ipmitool', 'redfish', 'idrac', 'ilo']
   # NOTE(dtantsur): disabling advanced networking as it's not used (or
@@ -132,12 +132,11 @@ parameter_defaults:
   IronicInspectorInterface: br-ctlplane
   # IronicInspectorSubnets:
   #   - ip_range: '192.168.24.100,192.168.24.200'
+  IronicInspectorUseSwift: false
+  IronicInspectorStorageBackend: 'database'
+  IronicConfigureSwiftTempUrlKey: false
   IronicProvisioningNetwork: 'ctlplane'
   IronicRescuingNetwork: 'ctlplane'
-  ZaqarMessageStore: 'swift'
-  ZaqarManagementStore: 'sqlalchemy'
-  MistralCorsAllowedOrigin: '*'
-  MistralExecutionFieldSizeLimit: 16384
   NeutronServicePlugins: router,segments
   NeutronMechanismDrivers: ['openvswitch', 'baremetal']
   NeutronNetworkVLANRanges: 'physnet1:1000:2999'
@@ -152,12 +151,6 @@ parameter_defaults:
   # This allows MTU > 1500 for the overcloud if local_mtu is set to 1500
   # See LP#1826729
   TenantNetPhysnetMtu: 0
-  SwiftCorsAllowedOrigin: '*'
-  SwiftReplicas: 1
-  SwiftWorkers: 2
-  SwiftAccountWorkers: 2
-  SwiftContainerWorkers: 2
-  SwiftObjectWorkers: 2
   # A list of static routes for the control plane network. Ensure traffic to
   # nodes on remote control plane networks use the correct network path.
   # Example:
@@ -183,7 +176,6 @@ parameter_defaults:
   UndercloudCtlplaneSubnets: {}
   UndercloudCtlplaneLocalSubnet: 'ctlplane-subnet'
   UndercloudNetworkConfigTemplate: 'templates/undercloud.j2'
-  MistralDockerGroup: true
   PasswordAuthentication: 'yes'
   HeatEngineOptVolumes:
     - /usr/lib/heat:/usr/lib/heat:ro

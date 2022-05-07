@@ -1,9 +1,17 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Nova libvirt service
 
 parameters:
+  Debug:
+    type: boolean
+    default: false
+    description: Set to True to enable debugging on all services.
+  LibvirtDebug:
+    type: boolean
+    default: false
+    description: Set to True to enable debugging libvirt services.
   LibvirtLogLevel:
     default: 3
     description: Defines log level in libvirt to filter log output.
@@ -18,6 +26,41 @@ parameters:
     type: number
     constraints:
       - range: { min: 1, max: 4 }
+  LibvirtVirtsecretdLogLevel:
+    default: 3
+    description: Defines log level in virtsecretd to filter log output.
+                 See https://libvirt.org/logging.html to find its detail.
+    type: number
+    constraints:
+      - range: { min: 1, max: 4 }
+  LibvirtVirtnodedevdLogLevel:
+    default: 3
+    description: Defines log level in virtnodedevd to filter log output.
+                 See https://libvirt.org/logging.html to find its detail.
+    type: number
+    constraints:
+      - range: { min: 1, max: 4 }
+  LibvirtVirtqemudLogLevel:
+    default: 3
+    description: Defines log level in virtqemud to filter log output.
+                 See https://libvirt.org/logging.html to find its detail.
+    type: number
+    constraints:
+      - range: { min: 1, max: 4 }
+  LibvirtVirtproxydLogLevel:
+    default: 3
+    description: Defines log level in virtproxyd to filter log output.
+                 See https://libvirt.org/logging.html to find its detail.
+    type: number
+    constraints:
+      - range: { min: 1, max: 4 }
+  LibvirtVirtstoragedLogLevel:
+    default: 3
+    description: Defines log level in virtstoraged to filter log output.
+                 See https://libvirt.org/logging.html to find its detail.
+    type: number
+    constraints:
+      - range: { min: 1, max: 4 }
 
 outputs:
   config_settings:
@@ -28,17 +71,89 @@ outputs:
           template:
             'LEVEL:file:/var/log/libvirt/libvirtd.log'
           params:
-            LEVEL: {get_param: LibvirtLogLevel}
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtLogLevel}
       nova::compute::libvirt::virtlogd::log_outputs:
         str_replace:
           template:
             'LEVEL:file:/var/log/libvirt/virtlogd.log'
           params:
-            LEVEL: {get_param: LibvirtVirtlogdLogLevel}
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtVirtlogdLogLevel}
+      nova::compute::libvirt::virtsecretd::log_outputs:
+        str_replace:
+          template:
+            'LEVEL:file:/var/log/libvirt/virtsecretd.log'
+          params:
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtVirtsecretdLogLevel}
+      nova::compute::libvirt::virtnodedevd::log_outputs:
+        str_replace:
+          template:
+            'LEVEL:file:/var/log/libvirt/virtnodedevd.log'
+          params:
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtVirtnodedevdLogLevel}
+      nova::compute::libvirt::virtqemud::log_outputs:
+        str_replace:
+          template:
+            'LEVEL:file:/var/log/libvirt/virtqemud.log'
+          params:
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtVirtqemudLogLevel}
+      nova::compute::libvirt::virtproxyd::log_outputs:
+        str_replace:
+          template:
+            'LEVEL:file:/var/log/libvirt/virtproxyd.log'
+          params:
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtVirtproxydLogLevel}
+      nova::compute::libvirt::virtstoraged::log_outputs:
+        str_replace:
+          template:
+            'LEVEL:file:/var/log/libvirt/virtstoraged.log'
+          params:
+            LEVEL:
+              if:
+                - or:
+                  - {get_param: Debug }
+                  - {get_param: LibvirtDebug }
+                - 1
+                - {get_param: LibvirtVirtstoragedLogLevel}
   volumes:
     description: The volumes needed to log to files in the host.
     value:
-      - /var/log/containers/libvirt:/var/log/libvirt:z
+      - /var/log/containers/libvirt:/var/log/libvirt:shared,z  # +qemu subdir
   docker_config:
     description: Extra containers needed for logging to file in the host.
     value: null

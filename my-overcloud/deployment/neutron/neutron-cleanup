@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # Cleanup neutron OVS bridges. To be called on startup to avoid
 # "difficult-to-debug" issues with partially configured resources.
 

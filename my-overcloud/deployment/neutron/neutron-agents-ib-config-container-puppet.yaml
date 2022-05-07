@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Neutron MLNX IB config service
@@ -16,9 +16,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -61,7 +58,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -103,7 +99,8 @@ outputs:
             pid: host
             user: root
             privileged: true
-            security_opt: 'label=disable'
+            security_opt:
+              - label=disable
             command:
               - puppet
               - apply
@@ -115,11 +112,9 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /lib/modules:/lib/modules:ro
-                  - /usr/share/openstack-puppet/modules/:/usr/share/openstack-puppet/modules/:ro
+                - - /lib/modules:/lib/modules:ro
+                  - /usr/share/openstack-puppet/modules:/usr/share/openstack-puppet/modules:ro
                   - /var/lib/config-data/puppet-generated/neutron/etc/neutron:/etc/neutron
-                  - ''
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}

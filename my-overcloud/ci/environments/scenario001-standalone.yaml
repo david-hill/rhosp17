@@ -6,10 +6,11 @@ resource_registry:
   OS::TripleO::Services::CeilometerAgentCentral: ../../deployment/ceilometer/ceilometer-agent-central-container-puppet.yaml
   OS::TripleO::Services::CeilometerAgentNotification: ../../deployment/ceilometer/ceilometer-agent-notification-container-puppet.yaml
   OS::TripleO::Services::ComputeCeilometerAgent: ../../deployment/ceilometer/ceilometer-agent-compute-container-puppet.yaml
-  OS::TripleO::Services::CephMgr: ../../deployment/ceph-ansible/ceph-mgr.yaml
-  OS::TripleO::Services::CephMon: ../../deployment/ceph-ansible/ceph-mon.yaml
-  OS::TripleO::Services::CephOSD: ../../deployment/ceph-ansible/ceph-osd.yaml
-  OS::TripleO::Services::CephClient: ../../deployment/ceph-ansible/ceph-client.yaml
+  OS::TripleO::Services::CephMgr: ../../deployment/cephadm/ceph-mgr.yaml
+  OS::TripleO::Services::CephMon: ../../deployment/cephadm/ceph-mon.yaml
+  OS::TripleO::Services::CephOSD: ../../deployment/cephadm/ceph-osd.yaml
+  OS::TripleO::Services::CephClient: ../../deployment/cephadm/ceph-client.yaml
+  OS::TripleO::Services::CephRgw: ../../deployment/cephadm/ceph-rgw.yaml
   OS::TripleO::Services::Collectd: ../../deployment/metrics/collectd-container-puppet.yaml
   OS::TripleO::Services::GnocchiApi: ../../deployment/gnocchi/gnocchi-api-container-puppet.yaml
   OS::TripleO::Services::GnocchiMetricd: ../../deployment/gnocchi/gnocchi-metricd-container-puppet.yaml
@@ -55,33 +56,20 @@ parameter_defaults:
   CeilometerQdrPublishMetrics: true
   ManageEventPipeline: true
   ManagePipeline: true
-
   Debug: true
-  CephAnsibleDisksConfig:
-    osd_objectstore: bluestore
-    osd_scenario: lvm
-    lvm_volumes:
-      - data: ceph_lv_data
-        data_vg: ceph_vg
-        db: ceph_lv_db
-        db_vg: ceph_vg
-        wal: ceph_lv_wal
-        wal_vg: ceph_vg
-  CephPoolDefaultPgNum: 32
+  CephSpecFqdn: true
+  CephOsdSpec:
+    data_devices:
+      paths:
+        - /dev/ceph_vg/ceph_lv_data
+  CephPoolDefaultPgNum: 8
   CephPoolDefaultSize: 1
-  CephAnsibleRepo: "tripleo-centos-ceph-nautilus"
   CinderRbdExtraPools: altrbd,pool2,pool3
   CephPools:
     - name: altrbd
       pg_num: 8
       rule_name: replicated_rule
-  CephAnsibleExtraConfig:
-    centos_package_dependencies: []
-    ceph_osd_docker_memory_limit: '1g'
-    ceph_mds_docker_memory_limit: '1g'
-    mon_host_v1: { 'enabled': False }
-    handler_health_mon_check_retries: 10
-    handler_health_mon_check_delay: 20
+      application: rbd
   #NOTE: These ID's and keys should be regenerated for
   # a production deployment. What is here is suitable for
   # developer and CI testing only.
@@ -121,12 +109,18 @@ parameter_defaults:
           key: "AQCwmeRcAAAAABAA6SQU/bGqFjlfLro5KxrB2Q=="
           mode: "0600"
       dashboard_enabled: false
-  CephAnsiblePlaybookVerbosity: 1
-  CephAnsibleEnvironmentVariables:
-    ANSIBLE_SSH_RETRIES: 4
-    DEFAULT_FORKS: 3
   NovaEnableRbdBackend: true
   CinderEnableRbdBackend: true
+  CinderRbdBackendName: tripleo_ceph,tripleo_ceph2,tripleo_ceph3
+  CinderRbdMultiConfig:
+    tripleo_ceph2:
+      CephClusterName: ceph2
+      CephClusterFSID: af25554b-42f6-4d2b-9b9b-d08a1132d3e8
+      CinderRbdAvailabilityZone: ceph2-AZ
+    tripleo_ceph3:
+      CephClusterName: ceph3
+      CephClusterFSID: e2cba068-5f14-4b0f-b047-acf375c0004a
+      CinderRbdAvailabilityZone: ceph3-AZ
   CinderBackupBackend: ceph
   GlanceBackend: cinder
   GlanceStoreDescription: 'Cinder glance store'
@@ -135,6 +129,7 @@ parameter_defaults:
       GlanceBackend: rbd
       GlanceStoreDescription: 'RBD glance store'
       CephClientUserName: 'glance'
+      CephClusterName: ceph
   GnocchiBackend: rbd
   CinderEnableIscsiBackend: false
   GnocchiArchivePolicy: 'ceilometer-high-rate'
@@ -166,6 +161,7 @@ parameter_defaults:
     telemetry:
       format: JSON
       presettle: false
+  CollectdAmqpSendQueueLimit: 40
   LoggingServers:
     - host: 127.0.0.1
       port: 24224
@@ -178,15 +174,31 @@ parameter_defaults:
     - tty5
     - tty6
   ContainerCli: podman
+  CephAdmVerbose: true
   CephConfigOverrides:
+    # put logs in /var/log/ceph/<cluster-fsid>
+    log_to_file: true
+    mon_cluster_log_to_file: true
+    # disable logging to journald so we don't log twice
+    log_to_stderr: false
+    mon_cluster_log_to_stderr: false
+    log_to_journald: false
+    mon_cluster_log_to_journald: false
+    # test values
     anotherkey: anothervalue
     global:
       globalkey: globalvalue
     osd:
       osdkey: osdvalue
     foo: bar
+    mon:
+      mon_warn_on_pool_no_redundancy: false
+      mon_warn_on_insecure_global_id_reclaim_allowed: false
   NfsUrl: 127.0.0.1
   CephMsgrSecureMode: true
+  CephAnsibleSkipClient: false
+  CephConfigPath: "/etc/ceph"
+  DisableCephadm: true
   LVMFilterEnabled: true
   LVMFilterAllowlist:
     - /dev/loop2
@@ -194,3 +206,4 @@ parameter_defaults:
     - /dev/loop4
   MultipathdEnable: true
   NovaLibvirtVolumeUseMultipath: true
+  BackupAndRestoreSkipNFSTest: true

@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Neutron Metadata agent
@@ -24,9 +24,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   EndpointMap:
     default: {}
@@ -68,18 +65,15 @@ parameters:
     default: false
     description: Set to True to enable debugging on all services.
   NeutronMetadataAgentDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging for Neutron Metadata agent.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   EnableInternalTLS:
     type: boolean
     default: false
 
 conditions:
   neutron_workers_unset: {equals : [{get_param: NeutronWorkers}, '']}
-  service_debug_unset: {equals: [{get_param: NeutronMetadataAgentDebug}, '']}
   internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   is_neutron_shared_metadata_notempty: {not: {equals: [{get_param: NeutronMetadataProxySharedSecret}, '']}}
 
@@ -94,7 +88,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -118,9 +111,9 @@ outputs:
             neutron::agents::metadata::auth_tenant: 'service'
             neutron::agents::metadata::debug:
                 if:
-                - service_debug_unset
-                - {get_param: Debug}
                 - {get_param: NeutronMetadataAgentDebug}
+                - true
+                - {get_param: Debug}
             neutron::agents::metadata::metadata_host:
               str_replace:
                 template:
@@ -180,6 +173,7 @@ outputs:
             image: {get_param: ContainerNeutronMetadataImage}
             net: host
             pid: host
+            cgroupns: host
             privileged: true
             restart: always
             healthcheck: {get_attr: [ContainersCommon, healthcheck_rpc_port]}
@@ -207,37 +201,9 @@ outputs:
             - name: enable virt_sandbox_use_netlink for healthcheck
               seboolean:
                 name: virt_sandbox_use_netlink
-                persistent: yes
-                state: yes
+                persistent: true
+                state: true
+              when:
+                - ansible_facts.selinux is defined
+                - ansible_facts.selinux.status == "enabled"
       upgrade_tasks: []
-      post_upgrade_tasks:
-        - name: Check for neutron user
-          getent:
-            database: passwd
-            key: neutron
-            fail_key: false
-        - name: Set neutron_user_avail
-          set_fact:
-            neutron_user_avail: "{{ getent_passwd is defined }}"
-        - when:
-            - step|int == 2
-            - neutron_user_avail|bool
-          block:
-            - name: Ensure r/w access for existing files after upgrade
-              become: true
-              shell: |
-                umask 0002
-                setfacl -d -R -m u:neutron:rwx /var/lib/neutron
-                setfacl -R -m u:neutron:rw /var/lib/neutron
-                find /var/lib/neutron -type d -exec setfacl -m u:neutron:rwx '{}' \;
-            - name: Provide access to domain sockets
-              become: true
-              shell: |
-                umask 0002
-                setfacl -m u:neutron:rwx "{{ item }}"
-              with_items:
-                - /var/lib/neutron/metadata_proxy
-                - /var/lib/neutron/keepalived-state-change
-                - /var/lib/neutron
-              # These files are not necessarily present
-              failed_when: false

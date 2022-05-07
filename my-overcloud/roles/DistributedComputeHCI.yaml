@@ -16,6 +16,7 @@
     StorageMgmt:
       subnet: storage_mgmt_subnet
   RoleParametersDefault:
+    FsAioMaxNumber: 1048576
     TunedProfileName: "throughput-performance"
   # CephOSD present so serial has to be 1
   update_serial: 1
@@ -23,18 +24,18 @@
     - OS::TripleO::Services::Aide
     - OS::TripleO::Services::AuditD
     - OS::TripleO::Services::BarbicanClient
-    - OS::TripleO::Services::BlockStorageCinderVolume
     - OS::TripleO::Services::BootParams
     - OS::TripleO::Services::CACerts
     - OS::TripleO::Services::CephClient
     - OS::TripleO::Services::CephExternal
+    - OS::TripleO::Services::CephGrafana
     - OS::TripleO::Services::CephMds
     - OS::TripleO::Services::CephMgr
     - OS::TripleO::Services::CephMon
     - OS::TripleO::Services::CephRbdMirror
     - OS::TripleO::Services::CephRgw
     - OS::TripleO::Services::CephOSD
-    - OS::TripleO::Services::CertmongerUser
+    - OS::TripleO::Services::CinderVolumeEdge
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::ComputeCeilometerAgent
     - OS::TripleO::Services::ComputeNeutronCorePlugin
@@ -42,6 +43,7 @@
     - OS::TripleO::Services::ComputeNeutronMetadataAgent
     - OS::TripleO::Services::ComputeNeutronOvsAgent
     - OS::TripleO::Services::Etcd
+    - OS::TripleO::Services::Frr
     - OS::TripleO::Services::GlanceApiEdge
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
@@ -61,6 +63,7 @@
     - OS::TripleO::Services::NovaMigrationTarget
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar

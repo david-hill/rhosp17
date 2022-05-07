@@ -1,5 +1,8 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 parameters:
+  RootStackName:
+    description: The name of the stack/plan.
+    type: string
   image:
     type: string
     default: unused
@@ -45,6 +48,8 @@ parameters:
       Command or script snippet to run on all overcloud nodes to
       initialize the upgrade process. E.g. a repository switch.
     default: ''
+    tags:
+      - role_specific
   UpgradeInitCommonCommand:
     type: string
     description: |
@@ -76,6 +81,11 @@ resources:
           - - {get_param: name}
             - ctlplane
       replacement_policy: AUTO
+      tags:
+        - str_replace:
+            template: tripleo_stack_name=$STACK_NAME
+            params:
+              $STACK_NAME: {get_param: RootStackName}
 
 outputs:
   OS::stack_id:

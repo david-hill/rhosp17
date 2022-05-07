@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder Dell EMC VMAX iscsi backend
@@ -42,9 +42,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -80,8 +77,6 @@ outputs:
           - tripleo::profile::base::cinder::volume::cinder_enable_dellemc_vmax_iscsi_backend: {get_param: CinderEnableDellEMCVMAXISCSIBackend}
             cinder::backend::dellemc_vmax_iscsi::volume_backend_name: {get_param: CinderDellEMCVMAXISCSIBackendName}
             cinder::backend::dellemc_vmax_iscsi::cinder_emc_config_file: {get_param: CinderDellEMCVMAXISCSIConfigFile}
-          -
-            if:
-            - {equals : [{get_param: CinderDellEMCVMAXISCSIAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderDellEMCVMAXISCSIAvailabilityZone}, '']}
             - cinder::backend::dellemc_vmax_iscsi::backend_availability_zone: {get_param: CinderDellEMCVMAXISCSIAvailabilityZone}

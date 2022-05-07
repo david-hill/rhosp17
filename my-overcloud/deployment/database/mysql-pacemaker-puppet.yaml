@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   MySQL service deployment with pacemaker bundle
@@ -38,9 +38,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   MysqlRootPassword:
     type: string
@@ -89,7 +86,6 @@ parameters:
       - allowed_values: ['docker', 'podman']
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -99,16 +95,11 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
 conditions:
-  puppet_debug_enabled: {get_param: ConfigDebug}
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
-  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
-  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
 
 outputs:
   role_data:
@@ -150,12 +141,12 @@ outputs:
               get_param: InternalTLSCAFile
             tripleo::profile::pacemaker::database::mysql_bundle::mysql_docker_image: &mysql_image_pcmklatest
               if:
-                - common_tag_full
+                - {get_param: ClusterFullTag}
                 - "cluster.common.tag/mariadb:pcmklatest"
                 - yaql:
                     data:
                       if:
-                        - common_tag_enabled
+                        - {get_param: ClusterCommonTag}
                         - yaql:
                             data: {get_param: ContainerMysqlImage}
                             expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
@@ -169,15 +160,10 @@ outputs:
                   "%{hiera('fqdn_$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, MysqlNetwork]}
-          -
-            if:
-            - internal_tls_enabled
-            -
-              tripleo::certmonger::mysql::postsave_cmd:
-                /usr/bin/certmonger-ha-resource-refresh.sh mysql galera galera-bundle Master
-              tripleo::profile::pacemaker::database::mysql_bundle::ca_file:
-                get_param: InternalTLSCAFile
-            - {}
+            tripleo::profile::pacemaker::database::mysql_bundle::ca_file:
+              if:
+                - {get_param: EnableInternalTLS}
+                - {get_param: InternalTLSCAFile}
       # BEGIN DOCKER SETTINGS #
       puppet_config:
         config_volume: mysql
@@ -255,10 +241,10 @@ outputs:
                     - 'mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "GRANT PROCESS ON *.* TO ''clustercheck''@''localhost'' WITH GRANT OPTION;"'
                     - 'mysql -uroot -p"${DB_ROOT_PASSWORD}" -e "DELETE FROM mysql.user WHERE user = ''root'' AND host NOT IN (''%'',''localhost'');"'
                     - 'timeout ${DB_MAX_TIMEOUT} mysqladmin -uroot -p"${DB_ROOT_PASSWORD}" shutdown'
-            volumes: &mysql_volumes
+            volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
+                - &mysql_volumes
                   - /var/lib/kolla/config_files/mysql.json:/var/lib/kolla/config_files/config.json:rw,z
                   - /var/lib/config-data/puppet-generated/mysql:/var/lib/kolla/config_files/src:ro,z
                   - /var/lib/mysql:/var/lib/mysql:rw,z
@@ -267,13 +253,7 @@ outputs:
               KOLLA_BOOTSTRAP: true
               DB_MAX_TIMEOUT: 60
               DB_CLUSTERCHECK_PASSWORD: {get_param: MysqlClustercheckPassword}
-              DB_ROOT_PASSWORD:
-                yaql:
-                  expression: $.data.passwords.where($ != '').first()
-                  data:
-                    passwords:
-                      - {get_param: MysqlRootPassword}
-                      - {get_param: [DefaultPasswords, mysql_root_password]}
+              DB_ROOT_PASSWORD: {get_param: MysqlRootPassword}
         step_2:
           mysql_wait_bundle:
             start_order: 0
@@ -288,9 +268,8 @@ outputs:
                   - 'file,file_line,concat,augeas,galera_ready,mysql_database,mysql_grant,mysql_user'
                   - 'include tripleo::profile::pacemaker::database::mysql_bundle'
                 - if:
-                  - puppet_debug_enabled
+                  - {get_param: ConfigDebug}
                   - - '--debug'
-                  - - ''
             image: {get_param: ContainerMysqlImage}
             volumes:
               list_concat:
@@ -300,7 +279,6 @@ outputs:
                 - if:
                   - docker_enabled
                   - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - null
             environment:
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
@@ -319,28 +297,30 @@ outputs:
       metadata_settings:
         get_attr: [MysqlBase, role_data, metadata_settings]
       deploy_steps_tasks:
-        - name: MySQL tag container image for pacemaker
-          when: step|int == 1
-          import_role:
-            name: tripleo_container_tag
-          vars:
-            container_image: {get_param: ContainerMysqlImage}
-            container_image_latest: *mysql_image_pcmklatest
-        - name: MySQL HA Wrappers Step
-          when: step|int == 2
-          block: &mysql_puppet_bundle
-            - name: Mysql puppet bundle
+        list_concat:
+          - get_attr: [MysqlBase, role_data, deploy_steps_tasks]
+          - - name: MySQL tag container image for pacemaker
+              when: step|int == 1
               import_role:
-                name: tripleo_ha_wrapper
+                name: tripleo_container_tag
               vars:
-                tripleo_ha_wrapper_service_name: mysql
-                tripleo_ha_wrapper_resource_name: galera
-                tripleo_ha_wrapper_bundle_name: galera-bundle
-                tripleo_ha_wrapper_resource_state: Master
-                tripleo_ha_wrapper_puppet_config_volume: mysql
-                tripleo_ha_wrapper_puppet_execute: '["Mysql_datadir", "Mysql_user", "Mysql_database", "Mysql_grant", "Mysql_plugin"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::database::mysql_bundle'
-                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
-                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
+                container_image: {get_param: ContainerMysqlImage}
+                container_image_latest: *mysql_image_pcmklatest
+            - name: MySQL HA Wrappers Step
+              when: step|int == 2
+              block: &mysql_puppet_bundle
+                - name: Mysql puppet bundle
+                  import_role:
+                    name: tripleo_ha_wrapper
+                  vars:
+                    tripleo_ha_wrapper_service_name: mysql
+                    tripleo_ha_wrapper_resource_name: galera
+                    tripleo_ha_wrapper_bundle_name: galera-bundle
+                    tripleo_ha_wrapper_resource_state: Master
+                    tripleo_ha_wrapper_puppet_config_volume: mysql
+                    tripleo_ha_wrapper_puppet_execute: '["Mysql_datadir", "Mysql_user", "Mysql_database", "Mysql_grant", "Mysql_plugin"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::database::mysql_bundle'
+                    tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                    tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
 
       update_tasks:
         - name: Tear-down non-HA mysql container
@@ -402,6 +382,11 @@ outputs:
                 container_image_latest: "{{galera_image_latest}}"
               when:
                 - old_galera_image_id.stdout != new_galera_image_id.stdout
+        - name: Ensure mariadb-server is not installed on the host
+          when: step|int == 2
+          yum:
+            name: 'mariadb-server*'
+            state: absent
 
       post_update_tasks:
         - name: Mysql bundle post update
@@ -411,10 +396,20 @@ outputs:
             tripleo_ha_wrapper_minor_update: true
 
       upgrade_tasks:
+       list_concat:
+       -
         - name: Tear-down non-HA mysql container
           when:
             - step|int == 0
           block: *mysql_teardown_nonha
+       -
+        - name: set mysql container name fact
+          when:
+            - step|int == 1
+          set_fact:
+            mysql_container_name: galera-bundle
+       - {get_attr: [MysqlBase, mysql_drop_unused_users]}
+       -
         - vars:
             mysql_upgrade_persist: {get_param: MysqlUpgradePersist}
           when:
@@ -485,7 +480,7 @@ outputs:
                 galera_pcs_res: "{{galera_pcs_res_result.rc == 0}}"
             - name: set is_mysql_bootstrap_node fact
               tags: common
-              set_fact: is_mysql_bootstrap_node={{mysql_short_bootstrap_node_name|lower == ansible_hostname|lower}}
+              set_fact: is_mysql_bootstrap_node={{mysql_short_bootstrap_node_name|lower == ansible_facts['hostname']|lower}}
         - name: Update galera pcs resource bundle for new container image
           when:
             - step|int == 1
@@ -602,51 +597,45 @@ outputs:
          # So do not exercise the upgrade if mysql is already running.
           when: step|int == 3
           block:
-            # mariadb package changes ownership of /var/lib/mysql on package
-            # update, so update here rather than in tripleo-package, to
-            # guarantee that ownership is fixed at the end of step 3
-            - name: Update host mariadb packages
-              when: step|int == 3
-              package: name=mariadb-server-galera state=latest
             - name: Mysql upgrade script
               set_fact:
                 mysql_upgrade_script:
-                  # idempotency: mysql_upgrade leaves a marker file
-                  # in datadir, it does nothing if it has already been
-                  # executed for the current version of MariaDB.
                   list_join:
-                    - ' '
-                    - - 'kolla_set_configs;'
-                      - 'if mysqladmin ping --silent; then exit 0; fi;'
-                      - 'chown -R mysql:mysql /var/lib/mysql;'
-                      - 'chown -R mysql:mysql /var/log/mariadb;'
-                      - 'mysqld_safe --user=mysql --wsrep-provider=none --skip-networking --wsrep-on=off &'
-                      - 'timeout 60 sh -c ''while ! mysqladmin ping --silent; do sleep 1; done'';'
-                      - 'mysql_upgrade;'
-                      - 'mysqladmin shutdown'
+                    - "\n"
+                    - # start a temporary mariadb server for running the upgrade
+                      - |
+                        kolla_set_configs
+                        if mysqladmin ping --silent; then exit 0; fi
+                        chown -R mysql:mysql /var/lib/mysql
+                        chown -R mysql:mysql /var/log/mysql
+                        mysqld_safe --user=mysql --wsrep-provider=none --skip-networking --wsrep-on=off --log-error=/var/log/mysql/mysqld-upgrade.log &
+                      # an idempotent script takes care of all upgrade steps
+                      # we inline the content here because at the time this is executed,
+                      # the script is not yet copied in /var/lib/container-config-scripts
+                      - { get_file: ../../container_config_scripts/mysql_upgrade_db.sh }
+                      # stop the temporary server
+                      - mysqladmin shutdown
             - name: Bind mounts for temporary container
               set_fact:
-                mysql_upgrade_db_bind_mounts: *mysql_volumes
-            - name: Make sure Mysql upgrade temporary directory exists
-              file:
-                path: /tmp/mariadb-upgrade
-                state: directory
-                owner: root
-                group: root
-                mode: 0700
+                mysql_upgrade_db_bind_mounts:
+                  list_concat:
+                    - {get_attr: [ContainersCommon, volumes]}
+                    - *mysql_volumes
+                    - - /var/log/containers/mysql:/var/log/mysql:rw,z
             - name: Upgrade Mysql database from a temporary container
               shell:
                 str_replace:
                   template:
                     'CONTAINER_CLI run --rm --log-driver=k8s-file --log-opt path=LOG_DIR/db-upgrade.log \
-                    -u root --net=host UPGRADE_ENV UPGRADE_VOLUMES "UPGRADE_IMAGE" /bin/bash -ecx "UPGRADE_SCRIPT"'
+                    -u root --net=host UPGRADE_ENV UPGRADE_VOLUMES "UPGRADE_IMAGE" /bin/bash -ecx "$UPGRADE_SCRIPT"'
                   params:
                     UPGRADE_ENV: '-e "KOLLA_CONFIG_STRATEGY=COPY_ALWAYS"'
                     UPGRADE_IMAGE: *mysql_image_pcmklatest
-                    UPGRADE_VOLUMES: "-v {{ mysql_upgrade_db_bind_mounts | union(['/tmp/mariadb-upgrade:/var/log/mariadb:rw,z']) | join(' -v ')}}"
-                    UPGRADE_SCRIPT: "{{mysql_upgrade_script}}"
+                    UPGRADE_VOLUMES: "-v {{ mysql_upgrade_db_bind_mounts | join(' -v ')}}"
                     CONTAINER_CLI: "{{ container_cli }}"
                     LOG_DIR: '/var/log/containers/mysql'
+              environment:
+                    UPGRADE_SCRIPT: "{{ mysql_upgrade_script }}"
 
       external_upgrade_tasks:
         - vars:
@@ -667,3 +656,19 @@ outputs:
                 tripleo_transfer_dest_dir: /var/lib/mysql
                 tripleo_transfer_dest_host: "{{hostvars[groups['overcloud'][0]]['mysql_short_bootstrap_node_name']}}"
                 tripleo_transfer_flag_file: /var/lib/tripleo/transfer-flags/var-lib-mysql
+                # inline copy of galera database
+                tripleo_transfer_sync_options:
+                  --whole-file
+                  --ignore-times
+                  --inplace
+                  --archive
+                  --delete
+                # include innodb files and dirs (schemas)
+                tripleo_transfer_include:
+                  - '/ibdata*'
+                  - '/ib_lru_dump'
+                  - '/ib_logfile[0-9]*'
+                  - '/undo*'
+                  - '/*/'
+                # exclude everything else
+                tripleo_transfer_exclude: '/*'

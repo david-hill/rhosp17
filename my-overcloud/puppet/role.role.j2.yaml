@@ -2,7 +2,7 @@
 {#- ## where a few parameter/resource names don't match the expected pattern #}
 {#- ## FIXME: we need some way to deprecate the old inconsistent parameters #}
 {%- set server_resource_name = role.deprecated_server_resource_name|default(role.name) -%}
-heat_template_version: rocky
+heat_template_version: wallaby
 description: 'OpenStack {{role.name}} node configured by Puppet'
 parameters:
 {%- set default_flavor_name = role.FlavorDefault|default('baremetal') %}
@@ -139,6 +139,8 @@ parameters:
       Command or script snippet to run on all overcloud nodes to
       initialize the upgrade process. E.g. a repository switch.
     default: ''
+    tags:
+      - role_specific
   UpgradeInitCommonCommand:
     type: string
     description: |
@@ -338,6 +340,10 @@ resources:
 {%- endif %}
           - {get_param: {{role.name}}IPs}
       NodeIndex: {get_param: NodeIndex}
+{%- if role.default_route_networks is defined and network.name in role.default_route_networks %}
+      DefaultRoute: true
+{%- endif %}
+      Role: {{role.name}}
   {%- endif %}
   {%- endfor %}
 
@@ -401,6 +407,15 @@ resources:
           short:
             - {get_attr: [{{server_resource_name}}, name]}
 
+  PreNetworkConfig:
+    type: OS::TripleO::{{role.name}}::PreNetworkConfig
+    condition: server_not_blacklisted
+    properties:
+      server: {get_resource: {{server_resource_name}}}
+      RoleParameters: {get_param: RoleParameters}
+      ServiceNames: {get_param: ServiceNames}
+      deployment_actions: {get_attr: [DeploymentActions, value]}
+
   # Resource for site-specific injection of root certificate
   NodeTLSCAData:
     type: OS::TripleO::NodeTLSCAData
@@ -449,37 +464,6 @@ resources:
         fqdn_ctlplane: {get_attr: [NetHostMap, value, ctlplane, fqdn]}
         fqdn_canonical: {get_attr: [NetHostMap, value, canonical, fqdn]}
         hostname_resolve_network: {get_param: [ServiceNetMap, {{role.name}}HostnameResolveNetwork]}
-        ovn_chassis_mac_map: {get_attr: [{{server_resource_name}}OVNChassisMacMap, value]}
-
-  {{server_resource_name}}OVNChassisMacPorts:
-    type: OS::Heat::ResourceGroup
-    properties:
-      count:
-        yaql:
-          expression: $.data.len()
-          data: {get_param: OVNBridgeMappings}
-      resource_def:
-        type: OS::TripleO::OVNMacAddressPort
-        properties:
-          PortName: {{server_resource_name}}-ovn-mac-%index%
-
-  {{server_resource_name}}OVNChassisMacMap:
-    type: OS::Heat::Value
-    properties:
-      type: json
-      value:
-        yaql:
-          expression: let(physnets => switch(isList($.data.physnets) => $.data.physnets, true => [])) ->
-                      $physnets.zip($.data.macs).toDict($.first(), $.last())
-          data:
-            physnets:
-              yaql:
-                expression: $.data.select($.split(':').first())
-                data: {get_param: OVNBridgeMappings}
-            macs:
-              yaql:
-                expression: switch(isDict($.data) => $.data.values(), true => [])
-                data: {get_attr: [{{server_resource_name}}OVNChassisMacPorts, attributes, mac_address]}
 
 outputs:
   ansible_host_vars_map:

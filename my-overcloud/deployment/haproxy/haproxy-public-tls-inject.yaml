@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   HAProxy deployment with TLS enabled, with an injected certificate
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -85,7 +82,7 @@ outputs:
                 path: "{{cert_path}}"
 
             - name: set is_haproxy_bootstrap_node fact
-              set_fact: is_haproxy_bootstrap_node={{haproxy_short_bootstrap_node_name | lower == ansible_hostname | lower}}
+              set_fact: is_haproxy_bootstrap_node={{haproxy_short_bootstrap_node_name | lower == ansible_facts['hostname'] | lower}}
               when:
                 - haproxy_short_bootstrap_node_name|default(false)
 
@@ -178,7 +175,16 @@ outputs:
                 - name: copy certificate, chgrp, restart haproxy
                   shell: |
                     set -e
-                    {{ container_cli }} cp {{ cert_path }} {{ item }}:{{ cert_path }}
+                    if {{ container_cli }} ps -f "id={{ item }}" --format "{{ '{{' }}.Names{{ '}}' }}" | grep -q "^haproxy-bundle"; then
+                      tar -c {{ cert_path }} | {{container_cli}} exec -i {{ item }} tar -C / -xv
+                    else
+                      {{ container_cli }} cp {{ cert_path }} {{ item }}:{{ cert_path }}
+                    fi
                     {{ container_cli }} exec --user root {{ item }} chgrp haproxy {{ cert_path }}
                     {{ container_cli }} kill --signal=HUP {{ item }}
+                  register: container_kill_result
+                  failed_when:
+                    - container_kill_result.rc != 0
+                    - ("no such container" not in container_kill_result.stderr)
+                    - ("container state improper" not in container_kill_result.stderr)
                   with_items: "{{ container_id.stdout.split('\n') }}"

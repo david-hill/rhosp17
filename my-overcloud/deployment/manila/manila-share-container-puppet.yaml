@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Manila Share service
@@ -25,9 +25,6 @@ parameters:
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
     type: json
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -48,6 +45,11 @@ parameters:
       description: >
         The Ceph cluster name must be at least 1 character and contain only
         letters and numbers.
+  CephConfigPath:
+    type: string
+    default: "/var/lib/tripleo-config/ceph"
+    description: |
+      The path where the Ceph Cluster config files are stored on the host.
   MonitoringSubscriptionManilaShare:
     default: 'overcloud-manila-share'
     type: string
@@ -61,7 +63,6 @@ parameters:
     description: Keystone region for endpoint
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -74,7 +75,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -90,10 +90,9 @@ outputs:
       config_settings:
         map_merge:
           - get_attr: [ManilaBase, role_data, config_settings]
-          -
             # keystone_authtoken
-            manila::keystone::authtoken::password: {get_param: ManilaPassword}
-            manila::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri]}
+          - manila::keystone::authtoken::password: {get_param: ManilaPassword}
+            manila::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystonePublic, uri]}
             manila::keystone::authtoken::auth_url: { get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             manila::keystone::authtoken::project_name: 'service'
             manila::keystone::authtoken::user_domain_name: 'Default'
@@ -177,6 +176,11 @@ outputs:
             volumes: {get_attr: [ManilaShareCommon, manila_share_volumes]}
             environment: {get_attr: [ManilaShareCommon, manila_share_environment]}
       host_prep_tasks:
+        - name: create fcontext entry for manila data
+          community.general.sefcontext:
+            target: "/var/lib/manila(/.*)?"
+            setype: container_file_t
+            state: present
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
@@ -188,6 +192,21 @@ outputs:
             - { 'path': /var/lib/manila, 'setype': container_file_t }
         - name: ensure ceph configurations exist
           file:
-            path: /etc/ceph
+            path: {get_param:CephConfigPath}
             state: directory
       upgrade_tasks: []
+      external_upgrade_tasks:
+        - when:
+            - step|int == 1
+          tags:
+            - never
+            - system_upgrade_transfer_data
+            - system_upgrade_stop_services
+          block:
+            - name: Stop manila share container
+              import_role:
+                name: tripleo_container_stop
+              vars:
+                tripleo_containers_to_stop:
+                  - manila_share
+                tripleo_delegate_to: "{{ groups['manila_share'] | default([]) }}"

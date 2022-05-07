@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   MLNX SDN configuration assist for Neutron ML2 Plugin.
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -40,6 +37,10 @@ parameters:
   MlnxSDNPassword:
     type: string
     description: The password for the SDN server.
+    hidden: true
+  MlnxSDNToken:
+    description: The token for the SDN server.
+    type: string
     hidden: true
   MlnxSDNUrl:
     description: SDN server URL
@@ -69,7 +70,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -84,6 +84,7 @@ outputs:
           - get_attr: [NeutronMl2Base, role_data, config_settings]
           - neutron::plugins::ml2::mellanox::mlnx_sdn_assist::sdn_username: {get_param: MlnxSDNUsername}
             neutron::plugins::ml2::mellanox::mlnx_sdn_assist::sdn_password: {get_param: MlnxSDNPassword}
+            neutron::plugins::ml2::mellanox::mlnx_sdn_assist::sdn_token: {get_param: MlnxSDNToken}
             neutron::plugins::ml2::mellanox::mlnx_sdn_assist::sdn_url: {get_param: MlnxSDNUrl}
             neutron::plugins::ml2::mellanox::mlnx_sdn_assist::sdn_domain: {get_param: MlnxSDNDomain}
             neutron::plugins::ml2::mellanox::mlnx_sdn_assist::sync_enabled: {get_param: MlnxSDNSyncEnabled}

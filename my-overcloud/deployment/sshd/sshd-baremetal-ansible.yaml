@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Configure sshd_config
@@ -13,9 +13,6 @@ parameters:
     description: Mapping of service_name -> network name. Typically set
                  via parameter_defaults in the resource registry.  This
                  mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -47,7 +44,7 @@ parameters:
       SyslogFacility: 'AUTHPRIV'
       AuthorizedKeysFile: '.ssh/authorized_keys'
       ChallengeResponseAuthentication: 'no'
-      GSSAPIAuthentication: 'yes'
+      GSSAPIAuthentication: 'no'
       GSSAPICleanupCredentials: 'no'
       UsePAM: 'yes'
       UseDNS: 'no'
@@ -90,9 +87,9 @@ outputs:
           dport: 22
           extras:
             ensure: {if: [ssh_firewall_allow_all, 'present', 'absent']}
-      host_prep_config:
+      host_prep_tasks:
         - include_role:
-            name: tripleo_ssh
+            name: tripleo_sshd
           vars:
             tripleo_sshd_server_options:
               map_merge:
