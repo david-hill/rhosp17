@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Manila VNX backend.
@@ -10,12 +10,19 @@ parameters:
   ManilaVNXBackendName:
     type: string
     default: tripleo_manila_vnx
+  ManilaVNXAvailabilityZone:
+    default: ''
+    description: >
+      The availability zone of the VNX backend.
+      When set, it overrides the default ManilaStorageAvailabilityZone.
+    type: string
   ManilaVNXNasLogin:
     type: string
     default: ''
   ManilaVNXNasPassword:
     type: string
     default: ''
+    hidden: true
   ManilaVNXNasServer:
     type: string
     default: ''
@@ -45,11 +52,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -65,24 +69,35 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
 
+parameter_groups:
+- label: deprecated
+  description: |
+   The following parameters are deprecated and will be removed. They should not
+   be relied on for new deployments. If you have concerns regarding deprecated
+   parameters, please contact the TripleO development team on IRC or the
+   OpenStack mailing list.
+  parameters:
+  - ManilaVNXDriverHandlesShareServers
+
 outputs:
   role_data:
     description: Role data for the Manila VNX backend.
     value:
       service_name: manila_backend_vnx
       config_settings:
-        manila::backend::dellemc_vnx::title: {get_param: ManilaVNXBackendName}
-        manila::backend::dellemc_vnx::emc_nas_login: {get_param: ManilaVNXNasLogin}
-        manila::backend::dellemc_vnx::driver_handles_share_servers: {get_param: ManilaVNXDriverHandlesShareServers}
-        manila::backend::dellemc_vnx::emc_nas_password: {get_param: ManilaVNXNasPassword}
-        manila::backend::dellemc_vnx::emc_nas_server: {get_param: ManilaVNXNasServer}
-        manila::backend::dellemc_vnx::emc_share_backend: vnx
-        manila::backend::dellemc_vnx::vnx_server_container: {get_param: ManilaVNXServerContainer}
-        manila::backend::dellemc_vnx::vnx_share_data_pools: {get_param: ManilaVNXShareDataPools}
-        manila::backend::dellemc_vnx::vnx_ethernet_ports: {get_param: ManilaVNXEthernetPorts}
-        manila::backend::dellemc_vnx::network_plugin_ipv6_enabled: {get_param: ManilaIPv6}
-        manila::backend::dellemc_vnx::emc_ssl_cert_verify: {get_param: ManilaVNXEmcSslCertVerify}
-        manila::backend::dellemc_vnx::emc_ssl_cert_path: {get_param: ManilaVNXEmcSslCertPath}
-      step_config:
-
-
+        map_merge:
+          - manila::backend::dellemc_vnx::title: {get_param: ManilaVNXBackendName}
+            manila::backend::dellemc_vnx::emc_nas_login: {get_param: ManilaVNXNasLogin}
+            manila::backend::dellemc_vnx::emc_nas_password: {get_param: ManilaVNXNasPassword}
+            manila::backend::dellemc_vnx::emc_nas_server: {get_param: ManilaVNXNasServer}
+            manila::backend::dellemc_vnx::emc_share_backend: vnx
+            manila::backend::dellemc_vnx::vnx_server_container: {get_param: ManilaVNXServerContainer}
+            manila::backend::dellemc_vnx::vnx_share_data_pools: {get_param: ManilaVNXShareDataPools}
+            manila::backend::dellemc_vnx::vnx_ethernet_ports: {get_param: ManilaVNXEthernetPorts}
+            manila::backend::dellemc_vnx::network_plugin_ipv6_enabled: {get_param: ManilaIPv6}
+            manila::backend::dellemc_vnx::emc_ssl_cert_verify: {get_param: ManilaVNXEmcSslCertVerify}
+            manila::backend::dellemc_vnx::emc_ssl_cert_path: {get_param: ManilaVNXEmcSslCertPath}
+          - if:
+              - { equals: [ { get_param: ManilaVNXAvailabilityZone }, '' ] }
+              - { }
+              - manila::backend::dellemc_vnx::backend_availability_zone: { get_param: ManilaVNXAvailabilityZone }

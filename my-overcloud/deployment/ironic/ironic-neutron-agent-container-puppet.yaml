@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack ironic-neutron-agent service
@@ -17,11 +17,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -44,9 +41,16 @@ parameters:
     type: string
     default: 'regionOne'
     description: Keystone region for endpoint
+  IronicNeutronAgentReportInterval:
+    type: number
+    default: 30
+    description: |
+      Seconds between reporting ironic node port state to server; should be
+      less than NeutronAgentDownTime, best if it is half or less than
+      NeutronAgentDownTime.
+
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -55,7 +59,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -73,13 +76,14 @@ outputs:
       config_settings:
         map_merge:
           - get_attr: [NeutronBase, role_data, config_settings]
-          - neutron::agents::ml2::networking_baremetal::user: 'ironic'
-          - neutron::agents::ml2::networking_baremetal::password: {get_param: IronicPassword}
-          - neutron::agents::ml2::networking_baremetal::auth_url: { get_param: [ EndpointMap, KeystoneInternal, uri_no_suffix ] }
-          - neutron::agents::ml2::networking_baremetal::project_name: 'service'
-          - neutron::agents::ml2::networking_baremetal::user_domain_name: 'Default'
-          - neutron::agents::ml2::networking_baremetal::project_domain_name: 'Default'
-          - neutron::agents::ml2::networking_baremetal::region_name: {get_param: KeystoneRegion}
+          - neutron::agents::ml2::networking_baremetal::username: 'ironic'
+            neutron::agents::ml2::networking_baremetal::password: {get_param: IronicPassword}
+            neutron::agents::ml2::networking_baremetal::auth_url: { get_param: [ EndpointMap, KeystoneInternal, uri_no_suffix ] }
+            neutron::agents::ml2::networking_baremetal::project_name: 'service'
+            neutron::agents::ml2::networking_baremetal::user_domain_name: 'Default'
+            neutron::agents::ml2::networking_baremetal::project_domain_name: 'Default'
+            neutron::agents::ml2::networking_baremetal::region_name: {get_param: KeystoneRegion}
+            neutron::agents::ml2::networking_baremetal::report_interval: {get_param: IronicNeutronAgentReportInterval}
           - get_attr: [NeutronLogging, config_settings]
       puppet_config:
         config_volume: neutron
@@ -113,8 +117,7 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 - {get_attr: [NeutronLogging, volumes]}
-                -
-                  - /var/lib/kolla/config_files/ironic_neutron_agent.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/ironic_neutron_agent.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/neutron:/var/lib/kolla/config_files/src:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS

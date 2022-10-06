@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Ironic services configured with Puppet
@@ -11,11 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -35,11 +32,9 @@ parameters:
     description: Set to True to enable debugging on all services.
     type: boolean
   IronicDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging Ironic services.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   EnableSQLAlchemyCollectd:
     type: boolean
     description: >
@@ -62,10 +57,10 @@ parameters:
       - allowed_values: [ '', 'oslo', 'json-rpc']
 
 conditions:
-  service_debug_unset: {equals : [{get_param: IronicDebug}, '']}
-  default_rsc_unset: {equals : [{get_param: IronicDefaultResourceClass}, '']}
-  rpc_transport_unset: {equals : [{get_param: IronicRpcTransport}, '']}
-  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
+  default_rsc_set:
+    not: {equals : [{get_param: IronicDefaultResourceClass}, '']}
+  rpc_transport_set:
+    not: {equals : [{get_param: IronicRpcTransport}, '']}
 
 outputs:
   role_data:
@@ -73,42 +68,36 @@ outputs:
     value:
       service_name: ironic_base
       config_settings:
-        map_merge:
-        -
-          ironic::database_connection:
-            make_url:
-              scheme: {get_param: [EndpointMap, MysqlInternal, protocol]}
-              username: ironic
-              password: {get_param: IronicPassword}
-              host: {get_param: [EndpointMap, MysqlInternal, host]}
-              path: /ironic
-              query:
-                if:
-                  - enable_sqlalchemy_collectd
-                  -
-                      read_default_file: /etc/my.cnf.d/tripleo.cnf
-                      read_default_group: tripleo
-                      plugin: collectd
-                      collectd_program_name: ironic
-                      collectd_host: localhost
-                  -
-                      read_default_file: /etc/my.cnf.d/tripleo.cnf
-                      read_default_group: tripleo
-
-          ironic::logging::debug:
-            if:
-            - service_debug_unset
-            - {get_param: Debug }
-            - {get_param: IronicDebug }
-        -
+        ironic::database_connection:
+          make_url:
+            scheme: {get_param: [EndpointMap, MysqlInternal, protocol]}
+            username: ironic
+            password: {get_param: IronicPassword}
+            host: {get_param: [EndpointMap, MysqlInternal, host]}
+            path: /ironic
+            query:
+              if:
+                - {get_param: EnableSQLAlchemyCollectd}
+                - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                  read_default_group: tripleo
+                  plugin: collectd
+                  collectd_program_name: ironic
+                  collectd_host: localhost
+                - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                  read_default_group: tripleo
+        ironic::logging::debug:
           if:
-          - default_rsc_unset
-          - {}
-          - ironic::default_resource_class: {get_param: IronicDefaultResourceClass}
-        -
+            - {get_param: IronicDebug}
+            - True
+            - {get_param: Debug}
+        ironic::default_resource_class:
           if:
-          - rpc_transport_unset
-          - {}
-          - ironic::rpc_transport: {get_param: IronicRpcTransport}
+          - default_rsc_set
+          - {get_param: IronicDefaultResourceClass}
+        ironic::rpc_transport:
+          if:
+          - rpc_transport_set
+          - {get_param: IronicRpcTransport}
+        ironic::rabbit_heartbeat_in_pthread: false
       step_config: |
         include tripleo::profile::base::ironic

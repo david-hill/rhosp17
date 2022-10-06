@@ -1,4 +1,7 @@
-heat_template_version: rocky
+{%- if ipv6_override is not defined %}
+{%- set ipv6_override = false %}
+{%- endif %}
+heat_template_version: wallaby
 
 description: >
   {{network.name}} network definition (automatically generated).
@@ -6,7 +9,7 @@ description: >
 parameters:
   # the defaults here work for static IP assignment (IPAM) only
   {{network.name}}NetCidr:
-{%- if network.ipv6 or ipv6_override %}
+{%- if network.ipv6|default(false) or ipv6_override %}
     default: "{{network.ipv6_subnet|default(network.ip_subnet|default(""))}}"
 {%- else %}
     default: "{{network.ip_subnet|default("")}}"
@@ -38,14 +41,14 @@ parameters:
     description: The name of the {{network.name_lower}} subnet in Neutron.
     type: string
   {{network.name}}AllocationPools:
-{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
+{%- if ":" in network.ip_subnet|default("") or network.ipv6|default(false) or ipv6_override %}
     default: {{network.ipv6_allocation_pools|default(network.allocation_pools|default([]))}}
 {%- else %}
     default: {{network.allocation_pools|default([])}}
 {%- endif %}
     description: Ip allocation pool range for the {{network.name_lower}} network.
     type: json
-{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
+{%- if ":" in network.ip_subnet|default("") or network.ipv6|default(false) or ipv6_override %}
   IPv6AddressMode:
     default: dhcpv6-stateful
     description: Neutron subnet IPv6 address mode
@@ -56,7 +59,7 @@ parameters:
     type: string
 {%- endif %}
   {{network.name}}InterfaceDefaultRoute:
-{%- if network.ipv6 or ipv6_override %}
+{%- if network.ipv6|default(false) or ipv6_override %}
     default: "{{network.gateway_ipv6|default(network.gateway_ip|default(''))}}"
 {%- else %}
     default: "{{network.gateway_ip|default('')}}"
@@ -83,7 +86,7 @@ parameters:
     type: number
 {%- for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
   {{network.name}}SubnetCidr_{{subnet}}:
-{%-     if network.ipv6 or ipv6_override %}
+{%-     if network.ipv6|default(false) or ipv6_override %}
     default: "{{network.subnets[subnet]['ipv6_subnet']|default(network.subnets[subnet]['ip_subnet']|default(""))}}"
 {%-     else %}
     default: "{{network.subnets[subnet]['ip_subnet']|default("")}}"
@@ -92,7 +95,7 @@ parameters:
       Cidr for the {{network.name_lower}} network's {{subnet}} subnet.
     type: string
   {{network.name}}AllocationPools_{{subnet}}:
-{%-     if ":" in network.subnets[subnet]['ip_subnet'] or network.ipv6 or ipv6_override %}
+{%-     if network.ipv6|default(false) or ipv6_override or ":" in network.subnets[subnet]['ip_subnet'] %}
     default: {{network.subnets[subnet]['ipv6_allocation_pools']|default(network.subnets[subnet]['allocation_pools']|default([]))}}
 {%-     else %}
     default: {{network.subnets[subnet]['allocation_pools']|default([])}}
@@ -101,7 +104,7 @@ parameters:
       Ip allocation pool range for the {{network.name_lower}} network's {{subnet}} subnet.
     type: json
   {{network.name}}InterfaceDefaultRoute_{{subnet}}:
-{%-     if ":" in network.subnets[subnet]['ip_subnet'] or network.ipv6 or ipv6_override %}
+{%-     if network.ipv6|default(false) or ipv6_override or ":" in network.subnets[subnet]['ip_subnet'] %}
     default: "{{network.subnets[subnet]['gateway_ipv6']|default(network.subnets[subnet]['gateway_ip']|default([]))}}"
 {%-     else %}
     default: "{{network.subnets[subnet]['gateway_ip']|default([])}}"
@@ -178,11 +181,13 @@ resources:
           - {get_param: {{network.name}}NetValueSpecs}
           - {'mtu': {get_param: {{network.name}}Mtu}}
       tags:
+        - tripleo_net_idx={{network.idx}}
+        - tripleo_network_name={{network.name}}
         - tripleo_vip={{network.vip|default(false)}}
 {%- if network.service_net_map_replace|default('') %}
         - tripleo_service_net_map_replace={{network.service_net_map_replace}}
 {%- endif %}
-{%- if network.ipv6 or ipv6_override %}
+{%- if network.ipv6|default(false) or ipv6_override %}
         - tripleo_ipv6=true
 {%- endif %}
 
@@ -203,7 +208,7 @@ resources:
       # All networks have an implicit network segment when created, map this subnet to that segment.
       segment: {get_attr: [{{network.name}}Network, segments, 0, id]}
       ip_version: {if: [is_ipv6, 6, 4]}
-{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
+{%- if network.ipv6|default(false) or ipv6_override or ":" in network.ip_subnet|default("") %}
       ipv6_address_mode: {get_param: IPv6AddressMode}
       ipv6_ra_mode: {get_param: IPv6RAMode}
 {%- else %}
@@ -251,7 +256,7 @@ resources:
       host_routes: {get_param: {{network.name}}Routes_{{subnet}}}
       segment: {get_resource: {{network.name}}Segment_{{subnet}}}
       ip_version: {if: [is_ipv6, 6, 4]}
-{%- if ":" in network.ip_subnet or network.ipv6 or ipv6_override %}
+{%- if network.ipv6|default(false) or ipv6_override or ":" in network.ip_subnet|default("") %}
       ipv6_address_mode: {get_param: IPv6AddressMode}
       ipv6_ra_mode: {get_param: IPv6RAMode}
 {%- else %}
@@ -275,35 +280,54 @@ outputs:
   network_cidrs:
     description: List of {{network.name}} network's subnets in CIDR notation.
     value:
-      list_concat:
-        if:
-          - manage_networks
-          - - - {get_attr: [{{network.name}}Subnet, cidr]}
-            -
+      if:
+        - manage_networks
+        - - {get_attr: [{{network.name}}Subnet, cidr]}
 {%- for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
-              - {get_attr: [{{network.name}}Subnet_{{subnet}}, cidr]}
+          - {get_attr: [{{network.name}}Subnet_{{subnet}}, cidr]}
 {%- endfor %}
-          - -
-{%- if network.ipv6 or ipv6_override %}
-              - {{network.ipv6_subnet|default(network.ip_subnet|default(""))}}
-{%- else %}
-              - "{{network.ip_subnet|default("")}}"
-{%- endif %}
-            -
+        - - {get_param: {{network.name}}NetCidr}
 {%- for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
-{%-     if network.ipv6 or ipv6_override %}
-              - "{{network.subnets[subnet]['ipv6_subnet']|default(network.subnets[subnet]['ip_subnet']|default(""))}}"
-{%-     else %}
-              - "{{network.subnets[subnet]['ip_subnet']|default("")}}"
-{%-     endif %}
+          - {get_param: {{network.name}}SubnetCidr_{{subnet}}}
 {%- endfor %}
+
   network_attrs:
     description: {{network.name}} network's attributes
-    value: {get_attr: [{{network.name}}Network, show]}
+    value:
+      if:
+        - manage_networks
+        - {get_attr: [{{network.name}}Network, show]}
+        - name: {{network.name_lower}}
+          dns_domain:
+            list_join:
+            - '.'
+            - - {{network.name.lower()}}
+              - {get_param: CloudDomain}
+              - ''
+          mtu: {{network.mtu|default('1500')}}
+
   subnet_attrs:
     description: Map of attributes for subnets in the {{network.name}} network
     value:
-      {{network.name_lower}}_subnet: {get_attr: [{{network.name}}Subnet, show]}
+      if:
+        - manage_networks
+        - {{network.name_lower}}_subnet: {get_attr: [{{network.name}}Subnet, show]}
 {%- for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
-      {{subnet}}: {get_attr: [{{network.name}}Subnet_{{subnet}}, show]}
+          {{subnet}}: {get_attr: [{{network.name}}Subnet_{{subnet}}, show]}
+{%- endfor %}
+        - {{network.name_lower}}_subnet:
+            name: {{network.name_lower}}_subnet
+            cidr: {get_param: {{network.name}}NetCidr}
+            dns_nameservers: []
+            gateway_ip: {get_param: {{network.name}}InterfaceDefaultRoute}
+            host_routes: {get_param: {{network.name}}Routes}
+            ip_version: {if: [is_ipv6, 6, 4]}
+{%- for subnet in network.subnets|default({}) if network.subnets[subnet].enabled|default(true) %}
+          {{subnet}}:
+            name: {{subnet}}
+            cidr: {get_param: {{network.name}}SubnetCidr_{{subnet}}}
+            dns_nameservers: []
+            gateway_ip: {get_param: {{network.name}}InterfaceDefaultRoute_{{subnet}}}
+            host_routes: {get_param: {{network.name}}Routes_{{subnet}}}
+            ip_version: {if: [is_ipv6, 6, 4]}
 {%- endfor %}

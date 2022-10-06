@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 #
 # Copyright 2017 Red Hat, Inc.
 #

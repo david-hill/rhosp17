@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Configure libvirt-guests
@@ -11,11 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   EndpointMap:
     default: {}

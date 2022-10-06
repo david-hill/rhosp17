@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Configure Cinder HPELeftHandISCSIDriver
@@ -36,11 +36,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -71,8 +68,6 @@ outputs:
             cinder::backend::hpelefthand_iscsi::hpelefthand_iscsi_chap_enabled: {get_param: CinderHPELeftHandISCSIChapEnabled}
             cinder::backend::hpelefthand_iscsi::hpelefthand_clustername: {get_param: CinderHPELeftHandClusterName}
             cinder::backend::hpelefthand_iscsi::hpelefthand_debug: {get_param: CinderHPELeftHandDebug}
-          -
-            if:
-            - {equals : [{get_param: CinderHPELeftHandISCSIAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderHPELeftHandISCSIAvailabilityZone}, '']}
             - cinder::backend::hpelefthand_iscsi::backend_availability_zone: {get_param: CinderHPELeftHandISCSIAvailabilityZone}

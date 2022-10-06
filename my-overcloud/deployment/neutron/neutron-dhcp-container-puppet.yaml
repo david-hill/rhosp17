@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Neutron DHCP service
@@ -59,11 +59,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -105,11 +102,9 @@ parameters:
     default: 'overcloud-neutron-dhcp'
     type: string
   NeutronDhcpAgentDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging for Neutron DHCP agent.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   NeutronDhcpAgentDnsmasqDnsServers:
     default: []
     description: List of servers to use as dnsmasq forwarders
@@ -147,6 +142,16 @@ parameters:
       Enable dhcp-host entry with list of addresses when port has multiple
       IPv6 addresses in the same subnet.
     type: boolean
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  NeutronDhcpCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
 
@@ -154,12 +159,9 @@ conditions:
   dnsmasq_wrapper_enabled: {equals: [{get_param: NeutronEnableDnsmasqDockerWrapper}, true]}
   haproxy_wrapper_enabled: {equals: [{get_param: NeutronEnableHaproxyDockerWrapper}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
-  service_wrapper_debug_unset: {equals : [{get_param: NeutronWrapperDebug}, false]}
-  service_debug_unset: {equals: [{get_param: NeutronDhcpAgentDebug}, '']}
   dhcp_ovs_intergation_bridge_unset: {equals: [{get_param: NeutronDhcpOvsIntegrationBridge}, '']}
-  is_ovn_in_neutron_mechanism_driver: {contains: ['ovn', {get_param: NeutronMechanismDrivers}]}
   az_unset: {equals: [{get_param: NeutronDhcpAgentAvailabilityZone}, '']}
-  omit_az_configs: {or: [is_ovn_in_neutron_mechanism_driver, az_unset]}
+  key_size_override_unset: {equals: [{get_param: NeutronDhcpCertificateKeySize}, '']}
 
 resources:
 
@@ -172,7 +174,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -223,9 +224,9 @@ outputs:
             tripleo::profile::base::neutron::dhcp_agent_wrappers::haproxy_image: {get_param: ContainerNeutronDHCPImage}
             tripleo::profile::base::neutron::dhcp_agent_wrappers::debug:
               if:
-                - service_wrapper_debug_unset
-                - {get_param: Debug }
                 - {get_param: NeutronWrapperDebug}
+                - true
+                - {get_param: Debug }
             tripleo::profile::base::neutron::container_cli: {get_param: ContainerCli}
             neutron::agents::dhcp::enable_isolated_metadata: {get_param: NeutronEnableIsolatedMetadata}
             neutron::agents::dhcp::enable_force_metadata: {get_param: NeutronEnableForceMetadata}
@@ -237,36 +238,21 @@ outputs:
             neutron::agents::dhcp::dnsmasq_enable_addr6_list: {get_param: NeutronDhcpAgentDnsmasqEnableAddr6List}
             neutron::agents::dhcp::debug:
               if:
-              - service_debug_unset
-              - {get_param: Debug}
               - {get_param: NeutronDhcpAgentDebug}
+              - true
+              - {get_param: Debug}
           - if:
               - internal_tls_enabled
               - neutron::agents::dhcp::ovsdb_agent_ssl_key_file: '/etc/pki/tls/private/neutron.key'
                 neutron::agents::dhcp::ovsdb_agent_ssl_cert_file: '/etc/pki/tls/certs/neutron.crt'
                 neutron::agents::dhcp::ovsdb_agent_ssl_ca_file: {get_param: InternalTLSCAFile}
-                generate_service_certificates: true
-                tripleo::profile::base::neutron::certificate_specs:
-                  service_certificate: '/etc/pki/tls/certs/neutron.crt'
-                  service_key: '/etc/pki/tls/private/neutron.key'
-                  hostname:
-                    str_replace:
-                      template: "%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
-                  principal:
-                    str_replace:
-                      template: "neutron/%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
-                  postsave_cmd: "/usr/bin/certmonger-neutron-dhcpd-refresh.sh"
               - {}
           - if:
               - dhcp_ovs_intergation_bridge_unset
               - {}
               - neutron::agents::dhcp::ovs_integration_bridge: {get_param: NeutronDhcpOvsIntegrationBridge}
           - if:
-              - omit_az_configs
+              - az_unset
               - {}
               - neutron::agents::dhcp::availability_zone: {get_param: NeutronDhcpAgentAvailabilityZone}
       service_config_settings:
@@ -339,9 +325,11 @@ outputs:
             image: {get_param: ContainerNeutronDHCPImage}
             net: host
             pid: host
+            cgroupns: host
             privileged: true
             restart: always
-            security_opt: 'label=disable'
+            security_opt:
+              - label=disable
             depends_on:
               - openvswitch.service
             healthcheck: {get_attr: [ContainersCommon, healthcheck_rpc_port]}
@@ -389,6 +377,46 @@ outputs:
               network: {get_param: [ServiceNetMap, NeutronApiNetwork]}
               type: node
           - null
+      deploy_steps_tasks:
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  - name: neutron
+                    dns:
+                      str_replace:
+                        template: "{{fqdn_$NETWORK}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
+                    principal:
+                      str_replace:
+                        template: "neutron/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, NeutronApiNetwork]}
+                    run_after: |
+                      container_name=$({{container_cli}} ps --format=\{\{.Names\}\} | grep neutron_dhcp)
+                      # The certificate is also installed on the computes, but neutron_dhcp is only
+                      # present on the controllers, so we exit if the container could not be found.
+                      [[ -z $container_name ]] && exit 0
+
+                      service_crt="/etc/pki/tls/certs/neutron.crt"
+                      service_key="/etc/pki/tls/private/neutron.key"
+                      # Copy the new cert from the mount-point to the real path
+                      {{container_cli}} exec -u root "$container_name" cp "/var/lib/kolla/config_files/src-tls$service_crt" "$service_crt"
+                      # Copy the new key from the mount-point to the real path
+                      {{container_cli}} exec -u root "$container_name" cp "/var/lib/kolla/config_files/src-tls$service_key "$service_key"
+                      # No need to trigger a reload for neutron dhcpd since the cert is not cached
+                    key_size:
+                      if:
+                        - key_size_override_unset
+                        - {get_param: CertificateKeySize}
+                        - {get_param: NeutronDhcpCertificateKeySize}
+                    ca: ipa
       host_prep_tasks:
         list_concat:
           - {get_attr: [NeutronLogging, host_prep_tasks]}
@@ -410,17 +438,20 @@ outputs:
             - name: enable virt_sandbox_use_netlink for healthcheck
               seboolean:
                 name: virt_sandbox_use_netlink
-                persistent: yes
-                state: yes
+                persistent: true
+                state: true
+              when:
+                - ansible_facts.selinux is defined
+                - ansible_facts.selinux.status == "enabled"
             - name: set conditions
               set_fact:
                 dnsmasq_wrapper_enabled: {get_param: NeutronEnableDnsmasqDockerWrapper}
                 haproxy_wrapper_enabled: {get_param: NeutronEnableHaproxyDockerWrapper}
                 debug_enabled:
                   if:
-                    - service_debug_unset
-                    - {get_param: Debug }
                     - {get_param: NeutronWrapperDebug}
+                    - true
+                    - {get_param: Debug }
                 docker_additional_sockets: {get_param: DockerAdditionalSockets}
             - name: create kill_scripts directory within /var/lib/neutron
               file:
@@ -439,34 +470,3 @@ outputs:
                 mode: 0755
                 content: {get_file: ./kill-script}
       upgrade_tasks: []
-      post_upgrade_tasks:
-        - name: Check for neutron user
-          getent:
-            database: passwd
-            key: neutron
-            fail_key: false
-        - name: Set neutron_user_avail
-          set_fact:
-            neutron_user_avail: "{{ getent_passwd is defined }}"
-        - when:
-            - step|int == 2
-            - neutron_user_avail|bool
-          block:
-            - name: Ensure read/write access for files created after upgrade
-              become: true
-              shell: |
-                umask 0002
-                setfacl -d -R -m u:neutron:rwx /var/lib/neutron
-                setfacl -R -m u:neutron:rw /var/lib/neutron
-                find /var/lib/neutron -type d -exec setfacl -m u:neutron:rwx '{}' \;
-            - name: Provide access for domain sockets
-              failed_when: false
-              become: true
-              shell: |
-                umask 0002
-                setfacl -m u:neutron:rwx "{{ item }}"
-              with_items:
-                - /var/lib/neutron/metadata_proxy
-                - /var/lib/neutron
-              # These files are not necessarily present
-              failed_when: false

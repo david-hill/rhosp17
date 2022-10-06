@@ -57,9 +57,6 @@ parameter_defaults:
     ManilaInternal: {protocol: 'http', port: '8786', host: 'IP_ADDRESS'}
     ManilaPublic: {protocol: 'https', port: '13786', host: 'CLOUDNAME'}
     MetricsQdrPublic: {protocol: 'amqp', port: '5666', host: 'CLOUDNAME'}
-    MistralAdmin: {protocol: 'http', port: '8989', host: 'IP_ADDRESS'}
-    MistralInternal: {protocol: 'http', port: '8989', host: 'IP_ADDRESS'}
-    MistralPublic: {protocol: 'https', port: '13989', host: 'CLOUDNAME'}
     MysqlInternal: {protocol: 'mysql+pymysql', port: '3306', host: 'IP_ADDRESS'}
     NeutronAdmin: {protocol: 'http', port: '9696', host: 'IP_ADDRESS'}
     NeutronInternal: {protocol: 'http', port: '9696', host: 'IP_ADDRESS'}
@@ -80,16 +77,6 @@ parameter_defaults:
     OctaviaAdmin: {protocol: 'http', port: '9876', host: 'IP_ADDRESS'}
     OctaviaInternal: {protocol: 'http', port: '9876', host: 'IP_ADDRESS'}
     OctaviaPublic: {protocol: 'https', port: '13876', host: 'CLOUDNAME'}
-    SaharaAdmin: {protocol: 'http', port: '8386', host: 'IP_ADDRESS'}
-    SaharaInternal: {protocol: 'http', port: '8386', host: 'IP_ADDRESS'}
-    SaharaPublic: {protocol: 'https', port: '13386', host: 'CLOUDNAME'}
     SwiftAdmin: {protocol: 'http', port: '8080', host: 'IP_ADDRESS'}
     SwiftInternal: {protocol: 'http', port: '8080', host: 'IP_ADDRESS'}
     SwiftPublic: {protocol: 'https', port: '13808', host: 'CLOUDNAME'}
-    ZaqarAdmin: {protocol: 'http', port: '8888', host: 'IP_ADDRESS'}
-    ZaqarInternal: {protocol: 'http', port: '8888', host: 'IP_ADDRESS'}
-    ZaqarPublic: {protocol: 'https', port: '13888', host: 'CLOUDNAME'}
-    ZaqarWebSocketAdmin: {protocol: 'ws', port: '9000', host: 'IP_ADDRESS'}
-    ZaqarWebSocketInternal: {protocol: 'ws', port: '9000', host: 'IP_ADDRESS'}
-    ZaqarWebSocketPublic: {protocol: 'wss', port: '3000', host: 'CLOUDNAME'}
-

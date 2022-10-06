@@ -3,7 +3,7 @@
 
 parameter_defaults:
   NovaSchedulerAvailableFilters: 'tripleo_common.filters.list.tripleo_filters'
-  NovaSchedulerDefaultFilters: ['TripleOCapabilitiesFilter', 'ComputeCapabilitiesFilter', 'AvailabilityZoneFilter', 'ComputeFilter', 'ImagePropertiesFilter', 'ServerGroupAntiAffinityFilter', 'ServerGroupAffinityFilter']
+  NovaSchedulerEnabledFilters: ['TripleOCapabilitiesFilter', 'ComputeCapabilitiesFilter', 'AvailabilityZoneFilter', 'ComputeFilter', 'ImagePropertiesFilter', 'ServerGroupAntiAffinityFilter', 'ServerGroupAffinityFilter']
   NovaSchedulerMaxAttempts: 30
   # Disable compute auto disabling:
   # As part of Pike, nova introduced a change to have the nova-compute
@@ -22,8 +22,7 @@ parameter_defaults:
     compute_service_user:
       key: 'compute_service_user'
       value: 'role:admin'
-  MistralExecutorVolumes:
-    - /var/lib/config-data/nova/etc/nova:/etc/nova:ro
+  IronicConfigureSwiftTempUrlKey: true
 
 resource_registry:
   OS::TripleO::Services::NovaApi: ../deployment/nova/nova-api-container-puppet.yaml

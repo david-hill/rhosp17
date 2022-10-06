@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Heat base service. Shared for all Heat services.
@@ -9,11 +9,9 @@ parameters:
     description: Set to True to enable debugging on all services.
     type: boolean
   HeatDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging Heat services.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   ServiceData:
     default: {}
     description: Dictionary packing service data
@@ -21,8 +19,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   HeatPassword:
     description: The password for the Heat service and db account, used by the Heat services.
@@ -32,9 +30,6 @@ parameters:
     type: string
     default: 'regionOne'
     description: Keystone region for endpoint
-  DefaultPasswords:
-    default: {}
-    type: json
   RoleName:
     default: ''
     description: Role name on which the service is applied
@@ -124,7 +119,7 @@ parameters:
     description: Maximum raw byte size of the Heat API JSON request body.
     type: number
   NotificationDriver:
-    type: string
+    type: comma_delimited_list
     default: 'noop'
     description: Driver or drivers to handle sending notifications.
   HeatCorsAllowedOrigin:
@@ -132,11 +127,38 @@ parameters:
     default: ''
     description: Indicate whether this resource may be shared with the domain received in the request
                  "origin" header.
+  MemcachedTLS:
+    default: false
+    description: Set to True to enable TLS on Memcached service.
+                 Because not all services support Memcached TLS, during the
+                 migration period, Memcached will listen on 2 ports - on the
+                 port set with MemcachedPort parameter (above) and on 11211,
+                 without TLS.
+    type: boolean
+  MemcacheUseAdvancedPool:
+    type: boolean
+    description: |
+      Use the advanced (eventlet safe) memcached client pool.
+    default: true
+  EnforceSecureRbac:
+    type: boolean
+    default: false
+    description: >-
+      Setting this option to True will configure each OpenStack service to
+      enforce Secure RBAC by setting `[oslo_policy] enforce_new_defaults` and
+      `[oslo_policy] enforce_scope` to True. This introduces a consistent set
+      of RBAC personas across OpenStack services that include support for
+      system and project scope, as well as keystone's default roles, admin,
+      member, and reader. Do not enable this functionality until all services in
+      your deployment actually support secure RBAC.
 
 conditions:
-  service_debug_unset: {equals : [{get_param: HeatDebug}, '']}
-  cache_enabled: {equals : [{get_param: EnableCache}, true]}
-  cors_allowed_origin_unset: {equals : [{get_param: HeatCorsAllowedOrigin}, '']}
+  tls_cache_enabled:
+    and:
+      - {get_param: EnableCache}
+      - {get_param: MemcachedTLS}
+  cors_allowed_origin_set:
+    not: {equals : [{get_param: HeatCorsAllowedOrigin}, '']}
 
 outputs:
   role_data:
@@ -145,30 +167,33 @@ outputs:
       service_name: heat_base
       config_settings:
         map_merge:
-          -
-            if:
-            - cors_allowed_origin_unset
-            - {}
+          - if:
+            - {get_param: EnforceSecureRbac}
+            - heat::policy::enforce_scope: true
+              heat::policy::enforce_new_defaults: true
+          - if:
+            - cors_allowed_origin_set
             - heat::cors::allowed_origin: {get_param: HeatCorsAllowedOrigin}
           - heat::notification_driver: {get_param: NotificationDriver}
             heat::logging::debug:
               if:
-              - service_debug_unset
-              - {get_param: Debug }
-              - {get_param: HeatDebug }
+              - {get_param: HeatDebug}
+              - true
+              - {get_param: Debug}
             heat::enable_proxy_headers_parsing: true
             heat::rpc_response_timeout: 600
             heat::rabbit_heartbeat_timeout_threshold: 60
+            heat::rabbit_heartbeat_in_pthread: false
             heat::region_name: {get_param: KeystoneRegion}
             heat::keystone::authtoken::project_name: 'service'
             heat::keystone::authtoken::user_domain_name: 'Default'
             heat::keystone::authtoken::project_domain_name: 'Default'
-            heat::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
+            heat::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix] }
             heat::keystone::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
             heat::keystone::authtoken::password: {get_param: HeatPassword}
             heat::keystone::authtoken::region_name: {get_param: KeystoneRegion}
             heat::keystone::authtoken::interface: 'internal'
-            heat::heat_keystone_clients_url: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix] }
+            heat::keystone::authtoken::memcache_use_advanced_pool: {get_param: MemcacheUseAdvancedPool}
             heat::keystone::domain::domain_name: 'heat_stack'
             heat::keystone::domain::domain_admin: 'heat_stack_domain_admin'
             heat::keystone::domain::domain_admin_email: 'heat_stack_domain_admin@localhost'
@@ -191,10 +216,10 @@ outputs:
             heat::cron::purge_deleted::age_type: {get_param: HeatCronPurgeDeletedAgeType}
             heat::cron::purge_deleted::destination: {get_param: HeatCronPurgeDeletedDestination}
             heat::max_json_body_size: {get_param: HeatMaxJsonBodySize}
-          -
-            if:
-            - cache_enabled
-            - heat::cache::enabled: true
-              heat::cache::backend: 'dogpile.cache.memcached'
-              heat::cache::resource_finder_caching: false
-            - {}
+          - heat::cache::enabled: {get_param: EnableCache}
+            heat::cache::tls_enabled: {get_param: MemcachedTLS}
+            heat::cache::resource_finder_caching: false
+          - if:
+              - tls_cache_enabled
+              - heat::cache::backend: 'dogpile.cache.pymemcache'
+              - heat::cache::backend: 'dogpile.cache.memcached'

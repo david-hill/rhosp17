@@ -41,8 +41,8 @@
     jid: "{{ puppet_host_async_result.ansible_job_id }}"
   register: puppet_host_outputs
   until: puppet_host_outputs.finished
-  retries: 1200
-  delay: 3
+  retries: 360
+  delay: 10
   failed_when:
     - (not puppet_host_outputs.finished) or (puppet_host_outputs.rc is defined and puppet_host_outputs.rc not in [0, 2])
   when:
@@ -117,7 +117,7 @@
 # Bootstrap tasks - run any tasks that have been defined
 ########################################################
 
-- name: "Clean container_puppet_tasks for {{ansible_hostname | lower}} step {{step}}"
+- name: "Clean container_puppet_tasks for {{ansible_facts['hostname'] | lower}} step {{step}}"
   become: true
   file:
     path: /var/lib/container-puppet/container-puppet-tasks{{step}}.json
@@ -125,11 +125,11 @@
   tags:
     - container_config_tasks
 
-- name: Calculate container_puppet_tasks for {{ansible_hostname | lower}} step {{step}}
+- name: Calculate container_puppet_tasks for {{ansible_facts['hostname'] | lower}} step {{step}}
   set_fact:
     "{{'host_container_puppet_tasks_' ~ step}}": "{{lookup('vars', 'host_container_puppet_tasks_' ~ step, default=[]) | union([item])}}"
   loop: "{{container_puppet_tasks.get('step_' ~ step, [])}}"
-  when: (groups[item.service_name] | default ([]) | map('extract', hostvars, 'inventory_hostname') | sort | first | lower) == ansible_hostname | lower
+  when: (groups[item.service_name] | default ([]) | map('extract', hostvars, 'inventory_hostname') | sort | first | lower) == ansible_facts['hostname'] | lower
   vars:
     container_puppet_tasks: "{{ lookup('file', tripleo_role_name + '/container_puppet_tasks.yaml', errors='ignore') | default({}, True) | from_yaml }}"
   tags:

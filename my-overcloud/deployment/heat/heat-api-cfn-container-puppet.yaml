@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Heat API CFN service
@@ -28,11 +28,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -62,9 +59,8 @@ parameters:
     type: string
 
 conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  heat_workers_zero: {equals : [{get_param: HeatWorkers}, 0]}
+  heat_workers_set:
+    not: {equals : [{get_param: HeatWorkers}, 0]}
 
 resources:
 
@@ -76,7 +72,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -88,7 +83,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -104,6 +98,13 @@ outputs:
         '125 heat_cfn':
           dport:
             - 8000
+      firewall_frontend_rules:
+        '100 heat_api_cfn_haproxy_frontend':
+          dport:
+            - 8000
+      firewall_ssl_frontend_rules:
+        '100 heat_api_cfn_haproxy_frontend_ssl':
+          dport:
             - 13800
       keystone_resources:
         heat-cfn:
@@ -147,11 +148,9 @@ outputs:
                   "%{hiera('fqdn_$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, HeatApiCfnNetwork]}
-          -
-            if:
-            - heat_workers_zero
-            - {}
-            - heat::wsgi::apache_api_cfn::workers: {get_param: HeatWorkers}
+          - if:
+              - heat_workers_set
+              - heat::wsgi::apache_api_cfn::workers: {get_param: HeatWorkers}
       service_config_settings:
         rsyslog:
           tripleo_logging_sources_heat_api_cfn:
@@ -173,9 +172,6 @@ outputs:
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
               dest: "/etc/httpd/conf.modules.d"
-              # TODO(emilien) remove optional flag once we get a promotion
-              # https://launchpad.net/bugs/1884115
-              optional: true
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/*"
@@ -208,19 +204,17 @@ outputs:
                   - /var/lib/kolla/config_files/heat_api_cfn.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/heat_api_cfn:/var/lib/kolla/config_files/src:ro
                 - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                    - []
-                - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                    - []
+                  - {get_param: EnableInternalTLS}
+                  - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks: {get_attr: [HeatApiCfnLogging, host_prep_tasks]}
       upgrade_tasks: []
       metadata_settings:
         get_attr: [ApacheServiceBase, role_data, metadata_settings]
+      deploy_steps_tasks:
+        get_attr: [ApacheServiceBase, role_data, deploy_steps_tasks]
       external_upgrade_tasks:
         - when:
             - step|int == 1

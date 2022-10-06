@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized aodh service
@@ -22,11 +22,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -66,13 +63,51 @@ parameters:
     description: The password for the aodh services.
     type: string
     hidden: true
-
-conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  AodhAlarmHistoryTTL:
+    description: Number of seconds that alarm histories are kept in the database
+    default: '86400'
+    type: string
+  EnableAodhExpirer:
+     type: boolean
+     default: true
+     description: Enable aodh expirer to periodically delete alarms from db
+  AodhExpirerMinute:
+    type: string
+    description: >
+        Cron to delete alarms data from db - Minute
+    default: '1'
+  AodhExpirerHour:
+    type: string
+    description: >
+        Cron to delete alarms data from db - Hour
+    default: '0'
+  AodhExpirerMonthday:
+    type: string
+    description: >
+        Cron to delete alarms data from db - Month Day
+    default: '*'
+  AodhExpirerMonth:
+    type: string
+    description: >
+        Cron to delete alarms data from db - Month
+    default: '*'
+  AodhExpirerWeekday:
+    type: string
+    description: >
+        Cron to delete alarms from db - Week Day
+    default: '*'
+  AodhExpirerMaxDelay:
+    type: string
+    description: >
+        Cron to delete alarms from db - Max Delay
+    default: '3600'
+  MemcacheUseAdvancedPool:
+    type: boolean
+    description: |
+      Use the advanced (eventlet safe) memcached client pool.
+    default: true
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -84,7 +119,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -94,7 +128,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -109,6 +142,13 @@ outputs:
         '128 aodh-api':
           dport:
             - 8042
+      firewall_frontend_rules:
+        '100 aodh_haproxy_frontend':
+          dport:
+            - 8042
+      firewall_ssl_frontend_rules:
+        '100 aodh_haproxy_frontend_ssl':
+          dport:
             - 13042
       keystone_resources:
         aodh:
@@ -138,13 +178,16 @@ outputs:
             aodh::api::service_name: 'httpd'
             aodh::api::enable_proxy_headers_parsing: true
             aodh::api::gnocchi_external_project_owner: {get_param: GnocchiExternalProject}
+            aodh::keystone::authtoken::project_name: 'service'
+            aodh::keystone::authtoken::user_domain_name: 'Default'
+            aodh::keystone::authtoken::project_domain_name: 'Default'
+            aodh::keystone::authtoken::password: {get_param: AodhPassword}
+            aodh::keystone::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix] }
+            aodh::keystone::authtoken::auth_url: { get_param: [EndpointMap, KeystoneInternal, uri_no_suffix] }
+            aodh::keystone::authtoken::region_name: {get_param: KeystoneRegion}
+            aodh::keystone::authtoken::interface: 'internal'
+            aodh::keystone::authtoken::memcache_use_advanced_pool: {get_param: MemcacheUseAdvancedPool}
             aodh::policy::policies: {get_param: AodhApiPolicies}
-            aodh::api::host:
-              str_replace:
-                template:
-                  "%{hiera('fqdn_$NETWORK')}"
-                params:
-                  $NETWORK: {get_param: [ServiceNetMap, AodhApiNetwork]}
             # NOTE: bind IP is found in hiera replacing the network name with the
             # local node IP for the given network; replacement examples
             # (eg. for internal_api):
@@ -157,6 +200,14 @@ outputs:
                    "%{hiera('$NETWORK')}"
                  params:
                    $NETWORK: {get_param: [ServiceNetMap, AodhApiNetwork]}
+            aodh::alarm_history_time_to_live: {get_param: AodhAlarmHistoryTTL}
+            enable_aodh_expirer: {get_param: EnableAodhExpirer}
+            aodh::expirer::minute: {get_param: AodhExpirerMinute}
+            aodh::expirer::hour: {get_param: AodhExpirerHour}
+            aodh::expirer::monthday: {get_param: AodhExpirerMonthday}
+            aodh::expirer::month: {get_param: AodhExpirerMonth}
+            aodh::expirer::weekday: {get_param: AodhExpirerWeekday}
+            aodh::expirer::maxdelay: {get_param: AodhExpirerMaxDelay}
       service_config_settings: {get_attr: [AodhBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS
       puppet_config:
@@ -171,18 +222,30 @@ outputs:
       kolla_config:
         /var/lib/kolla/config_files/aodh_api.json:
           command: /usr/sbin/httpd -DFOREGROUND
-          config_files:
+          config_files: &aodh_api_config_files
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.d"
               dest: "/etc/httpd/conf.d"
               merge: false
               preserve_properties: true
             - source: "/var/lib/kolla/config_files/src/etc/httpd/conf.modules.d"
               dest: "/etc/httpd/conf.modules.d"
-              # TODO(emilien) remove optional flag once we get a promotion
-              # https://launchpad.net/bugs/1884115
-              optional: true
               merge: false
               preserve_properties: true
+            - source: "/var/lib/kolla/config_files/src/*"
+              dest: "/"
+              merge: true
+              preserve_properties: true
+          permissions: &aodh_api_permissions
+            - path: /var/log/aodh
+              owner: aodh:aodh
+              recurse: true
+        /var/lib/kolla/config_files/aodh_api_db_sync.json:
+          command: "/usr/bin/bootstrap_host_exec aodh_api su aodh -s /bin/bash -c /usr/bin/aodh-dbsync"
+          config_files: *aodh_api_config_files
+          permissions: *aodh_api_permissions
+        /var/lib/kolla/config_files/aodh_api_cron.json:
+          command: /usr/sbin/crond -n
+          config_files:
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -212,13 +275,16 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/config-data/aodh/etc/my.cnf.d/tripleo.cnf:/etc/my.cnf.d/tripleo.cnf:ro
-                  - /var/lib/config-data/aodh/etc/aodh/:/etc/aodh/:ro
+                - - /var/lib/kolla/config_files/aodh_api_db_sync.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/aodh:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/aodh:/var/log/aodh
                   - /var/log/containers/httpd/aodh-api:/var/log/httpd
-            command: "/usr/bin/bootstrap_host_exec aodh_api su aodh -s /bin/bash -c /usr/bin/aodh-dbsync"
+                - if:
+                  - {get_param: EnableInternalTLS}
+                  - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
             environment:
+              KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
         step_4:
           aodh_api:
@@ -231,19 +297,32 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/aodh_api.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/aodh_api.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/aodh:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/aodh:/var/log/aodh
                   - /var/log/containers/httpd/aodh-api:/var/log/httpd
                 - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
-                    - []
-                - if:
-                    - internal_tls_enabled
-                    - - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
-                    - []
+                  - {get_param: EnableInternalTLS}
+                  - - /etc/pki/tls/certs/httpd:/etc/pki/tls/certs/httpd:ro
+                    - /etc/pki/tls/private/httpd:/etc/pki/tls/private/httpd:ro
+
+            environment:
+              KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
+          aodh_api_cron:
+            image: *aodh_api_image
+            net: host
+            user: root
+            privileged: false
+            restart: always
+            healthcheck:
+              test: '/usr/share/openstack-tripleo-common/healthcheck/cron aodh'
+            volumes:
+              list_concat:
+                - {get_attr: [ContainersCommon, volumes]}
+                - - /var/lib/kolla/config_files/aodh_api_cron.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/aodh:/var/lib/kolla/config_files/src:ro
+                  - /var/log/containers/aodh:/var/log/aodh
+                  - /var/log/containers/httpd/aodh-api:/var/log/httpd
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
@@ -258,6 +337,8 @@ outputs:
           - { 'path': /var/log/containers/httpd/aodh-api, setype: container_file_t, 'mode': '0750' }
       metadata_settings:
         get_attr: [ApacheServiceBase, role_data, metadata_settings]
+      deploy_steps_tasks:
+        get_attr: [ApacheServiceBase, role_data, deploy_steps_tasks]
       external_upgrade_tasks:
         - when:
             - step|int == 1
@@ -272,4 +353,5 @@ outputs:
               vars:
                 tripleo_containers_to_stop:
                   - aodh_api
+                  - aodh_api_cron
                 tripleo_delegate_to: "{{ groups['aodh_api'] | default([]) }}"

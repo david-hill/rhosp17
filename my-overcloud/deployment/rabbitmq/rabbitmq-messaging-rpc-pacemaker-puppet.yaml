@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Rabbitmq service
@@ -36,11 +36,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RabbitCookie:
     type: string
@@ -76,11 +73,6 @@ conditions:
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
   common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
   common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
-  rabbit_cookie_param_set:
-    not:
-      equals:
-      - {get_param: RabbitCookie}
-      - ''
 
 resources:
 
@@ -93,7 +85,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -199,11 +190,7 @@ outputs:
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
-              RABBITMQ_CLUSTER_COOKIE:
-                if:
-                  - rabbit_cookie_param_set
-                  - {get_param: RabbitCookie}
-                  - {get_param: [DefaultPasswords, rabbit_cookie]}
+              RABBITMQ_CLUSTER_COOKIE: {get_param: RabbitCookie}
         step_2:
           rabbitmq_wait_bundle:
             start_order: 0
@@ -232,14 +219,15 @@ outputs:
               # NOTE: this should force this container to re-run on each
               # update (scale-out, etc.)
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
-              RABBITMQ_CLUSTER_COOKIE:
-                if:
-                  - rabbit_cookie_param_set
-                  - {get_param: RabbitCookie}
-                  - {get_param: [DefaultPasswords, rabbit_cookie]}
+              RABBITMQ_CLUSTER_COOKIE: {get_param: RabbitCookie}
       metadata_settings:
         get_attr: [RabbitmqBase, role_data, metadata_settings]
       host_prep_tasks:
+        - name: create fcontext for rabbitmq data
+          community.general.sefcontext:
+            target: "/var/lib/rabbitmq(/.*)?"
+            setype: container_file_t
+            state: present
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
@@ -255,28 +243,30 @@ outputs:
             echo 'export ERL_EPMD_PORT=4370' >> /etc/rabbitmq/rabbitmq-env.conf
             for pid in $(pgrep epmd --ns 1 --nslist pid); do kill $pid; done
       deploy_steps_tasks:
-        - name: RabbitMQ tag container image for pacemaker
-          when: step|int == 1
-          import_role:
-            name: tripleo_container_tag
-          vars:
-            container_image: {get_param: ContainerRabbitmqImage}
-            container_image_latest: *rabbitmq_image_pcmklatest
-        - name: RabbitMQ RPC HA Wrappers Step
-          when: step|int == 2
-          block: &oslo_messaging_rpc_puppet_bundle
-            - name: Rabbitmq rpc puppet bundle
+        list_concat:
+          - get_attr: [RabbitmqBase, role_data, deploy_steps_tasks]
+          - - name: RabbitMQ tag container image for pacemaker
+              when: step|int == 1
               import_role:
-                name: tripleo_ha_wrapper
+                name: tripleo_container_tag
               vars:
-                tripleo_ha_wrapper_service_name: oslo_messaging_rpc
-                tripleo_ha_wrapper_resource_name: rabbitmq
-                tripleo_ha_wrapper_bundle_name: rabbitmq-bundle
-                tripleo_ha_wrapper_resource_state: Started
-                tripleo_ha_wrapper_puppet_config_volume: rabbitmq
-                tripleo_ha_wrapper_puppet_execute: '["Rabbitmq_policy", "Rabbitmq_user"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::rabbitmq_bundle'
-                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
-                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
+                container_image: {get_param: ContainerRabbitmqImage}
+                container_image_latest: *rabbitmq_image_pcmklatest
+            - name: RabbitMQ RPC HA Wrappers Step
+              when: step|int == 2
+              block: &oslo_messaging_rpc_puppet_bundle
+                - name: Rabbitmq rpc puppet bundle
+                  import_role:
+                    name: tripleo_ha_wrapper
+                  vars:
+                    tripleo_ha_wrapper_service_name: oslo_messaging_rpc
+                    tripleo_ha_wrapper_resource_name: rabbitmq
+                    tripleo_ha_wrapper_bundle_name: rabbitmq-bundle
+                    tripleo_ha_wrapper_resource_state: Started
+                    tripleo_ha_wrapper_puppet_config_volume: rabbitmq
+                    tripleo_ha_wrapper_puppet_execute: '["Rabbitmq_policy", "Rabbitmq_user"].each |String $val| { noop_resource($val) }; include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::rabbitmq_bundle'
+                    tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                    tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
 
       update_tasks:
         - name: Tear-down non-HA rabbitmq container
@@ -363,7 +353,7 @@ outputs:
               set_fact:
                 rabbitmq_pcs_res: "{{rabbitmq_pcs_res_result.rc == 0}}"
             - name: set is_rpc_rabbitmq_bootstrap_node fact
-              set_fact: is_rpc_rabbitmq_bootstrap_node={{oslo_messaging_rpc_short_bootstrap_node_name|lower == ansible_hostname|lower}}
+              set_fact: is_rpc_rabbitmq_bootstrap_node={{oslo_messaging_rpc_short_bootstrap_node_name|lower == ansible_facts['hostname']|lower}}
         - name: Update rabbitmq-bundle pcs resource bundle for new container image
           when:
             - step|int == 1

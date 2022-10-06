@@ -24,9 +24,9 @@
     - OS::TripleO::Services::CeilometerAgentNotification
     - OS::TripleO::Services::CephClient
     - OS::TripleO::Services::CephExternal
-    - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::ContainersLogrotateCrond
+    - OS::TripleO::Services::Frr
     - OS::TripleO::Services::GnocchiApi
     - OS::TripleO::Services::GnocchiMetricd
     - OS::TripleO::Services::GnocchiStatsd

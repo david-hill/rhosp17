@@ -28,11 +28,13 @@
     - OS::TripleO::Services::Aide
     - OS::TripleO::Services::AuditD
     - OS::TripleO::Services::CACerts
-    - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Clustercheck
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::ContainerImagePrepare
+    - OS::TripleO::Services::ContainersLogrotateCrond
+    - OS::TripleO::Services::Frr
     - OS::TripleO::Services::HAproxy
+    - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
     - OS::TripleO::Services::Kernel
@@ -44,9 +46,10 @@
     - OS::TripleO::Services::NovaConductor
     - OS::TripleO::Services::NovaMetadata
     - OS::TripleO::Services::NovaVncProxy
-    - OS::TripleO::Services::ContainersLogrotateCrond
-    - OS::TripleO::Services::Pacemaker
     - OS::TripleO::Services::OsloMessagingRpc
+    - OS::TripleO::Services::Pacemaker
+    - OS::TripleO::Services::Podman
+    - OS::TripleO::Services::Ptp
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar
@@ -59,5 +62,3 @@
     - OS::TripleO::Services::TripleoPackages
     - OS::TripleO::Services::Tuned
     - OS::TripleO::Services::Vpp
-    - OS::TripleO::Services::Podman
-    - OS::TripleO::Services::Ptp

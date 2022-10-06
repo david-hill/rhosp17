@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Neutron L3 agent
@@ -66,11 +66,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -101,11 +98,9 @@ parameters:
     default: 'overcloud-neutron-l3-agent'
     type: string
   NeutronL3AgentDebug:
-    default: ''
+    default: false
     description: Set to True to enable debugging for Neutron L3 agent.
-    type: string
-    constraints:
-      - allowed_values: [ '', 'true', 'True', 'TRUE', 'false', 'False', 'FALSE']
+    type: boolean
   # NOTE(bogdando): we allow the L3 agent to have AZ configs defined disregard of
   # the used NeutronMechanismDrivers.
   NeutronL3AgentAvailabilityZone:
@@ -130,15 +125,32 @@ parameters:
       will be passed
     type: string
 
+  NeutronL3AgentLoggingRateLimit:
+    default: 100
+    description: |
+      Maximum number of packets logging per second
+    type: number
+  NeutronL3AgentLoggingBurstLimit:
+    default: 25
+    description: |
+      Maximum number of packets per rate_limit
+    type: number
+  NeutronL3AgentLoggingLocalOutputLogBase:
+    default: ''
+    description: |
+      Output logfile path on agent side, default syslog file
+    type: string
+
 conditions:
   keepalived_wrapper_enabled: {equals: [{get_param: NeutronEnableKeepalivedWrapper}, true]}
   haproxy_wrapper_enabled: {equals: [{get_param: NeutronEnableHaproxyDockerWrapper}, true]}
   dibbler_wrapper_enabled: {equals: [{get_param: NeutronEnableDibblerDockerWrapper}, true]}
   radvd_wrapper_enabled: {equals: [{get_param: NeutronEnableRadvdDockerWrapper}, true]}
   docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
-  service_debug_unset: {equals : [{get_param: NeutronWrapperDebug}, false]}
   az_unset: {equals: [{get_param: NeutronL3AgentAvailabilityZone}, '']}
   l3_agent_extensions_empty: {equals : [{get_param: NeutronL3AgentExtensions}, "''"]}
+  network_log_local_output_log_base_set:
+    not: {equals : [{get_param: NeutronL3AgentLoggingLocalOutputLogBase}, '']}
 
 resources:
 
@@ -151,7 +163,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -204,25 +215,29 @@ outputs:
             tripleo::profile::base::neutron::l3_agent_wrappers::radvd_image: {get_param: ContainerNeutronL3AgentImage}
             tripleo::profile::base::neutron::l3_agent_wrappers::debug:
               if:
-                - service_debug_unset
-                - {get_param: Debug }
                 - {get_param: NeutronWrapperDebug}
+                - true
+                - {get_param: Debug }
             tripleo::profile::base::neutron::container_cli: {get_param: ContainerCli}
           - neutron::agents::l3::debug:
               if:
-              - service_debug_unset
-              - {get_param: Debug}
               - {get_param: NeutronL3AgentDebug}
-          -
+              - true
+              - {get_param: Debug}
           - if:
             - az_unset
             - {}
             - neutron::agents::l3::availability_zone: {get_param: NeutronL3AgentAvailabilityZone}
-            if:
+          - if:
             - l3_agent_extensions_empty
             - {}
             - neutron::agents::l3::extensions: {get_param: NeutronL3AgentExtensions}
           - neutron::agents::l3::radvd_user: {get_param: NeutronL3AgentRadvdUser}
+          - neutron::agents::l3::network_log_rate_limit: {get_param: NeutronL3AgentLoggingRateLimit}
+          - neutron::agents::l3::network_log_burst_limit: {get_param: NeutronL3AgentLoggingBurstLimit}
+          - if:
+            - network_log_local_output_log_base_set
+            - neutron::agents::l3::network_log_local_output_log_base: {get_param: NeutronL3AgentLoggingLocalOutputLogBase}
       service_config_settings:
         map_merge:
           - get_attr: [NeutronBase, role_data, service_config_settings]
@@ -285,6 +300,7 @@ outputs:
             pid: host
             privileged: true
             restart: always
+            cgroupns: host
             depends_on:
               - openvswitch.service
             healthcheck: {get_attr: [ContainersCommon, healthcheck_rpc_port]}
@@ -351,8 +367,11 @@ outputs:
             - name: enable virt_sandbox_use_netlink for healthcheck
               seboolean:
                 name: virt_sandbox_use_netlink
-                persistent: yes
-                state: yes
+                persistent: true
+                state: true
+              when:
+                - ansible_facts.selinux is defined
+                - ansible_facts.selinux.status == "enabled"
             - name: set conditions
               set_fact:
                 keepalived_wrapper_enabled: {get_param: NeutronEnableKeepalivedWrapper}
@@ -361,9 +380,9 @@ outputs:
                 radvd_wrapper_enabled: {get_param: NeutronEnableRadvdDockerWrapper}
                 debug_enabled:
                   if:
-                    - service_debug_unset
-                    - {get_param: Debug }
                     - {get_param: NeutronWrapperDebug}
+                    - true
+                    - {get_param: Debug}
                 docker_additional_sockets: {get_param: DockerAdditionalSockets}
             - name: create kill_scripts directory within /var/lib/neutron
               file:
@@ -394,34 +413,3 @@ outputs:
                 mode: 0755
                 content: {get_file: ./kill-script}
       upgrade_tasks: []
-      post_upgrade_tasks:
-        - name: Check for neutron user
-          getent:
-            database: passwd
-            key: neutron
-            fail_key: false
-        - name: Set neutron_user_avail
-          set_fact:
-            neutron_user_avail: "{{ getent_passwd is defined }}"
-        - when:
-            - step|int == 2
-            - neutron_user_avail|bool
-          block:
-            - name: Ensure r/w access for existing files after upgrade
-              become: true
-              shell: |
-                umask 0002
-                setfacl -d -R -m u:neutron:rwx /var/lib/neutron
-                setfacl -R -m u:neutron:rw /var/lib/neutron
-                find /var/lib/neutron -type d -exec setfacl -m u:neutron:rwx '{}' \;
-            - name: Provide access to domain sockets
-              become: true
-              shell: |
-                umask 0002
-                setfacl -m u:neutron:rwx "{{ item }}"
-              with_items:
-                - /var/lib/neutron/metadata_proxy
-                - /var/lib/neutron/keepalived-state-change
-                - /var/lib/neutron
-              # These files are not necessarily present
-              failed_when: false

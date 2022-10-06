@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder Dell EMC Storage Center backend
@@ -96,11 +96,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -142,8 +139,6 @@ outputs:
             cinder::backend::dellemc_sc::excluded_domain_ips: {get_param: CinderScExcludedDomainIps}
             cinder::backend::dellemc_sc::use_multipath_for_image_xfer: {get_param: CinderScMultipathXfer}
             cinder::backend::dellemc_sc::sc_storage_protocol: {get_param: CinderScStorageProtocol}
-          -
-            if:
-            - {equals : [{get_param: CinderScAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderScAvailabilityZone}, '']}
             - cinder::backend::dellemc_sc::backend_availability_zone: {get_param: CinderScAvailabilityZone}

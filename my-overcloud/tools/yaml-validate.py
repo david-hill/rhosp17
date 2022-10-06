@@ -1,4 +1,4 @@
-#!/usr/libexec/platform-python
+#!/usr/bin/python3
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
@@ -12,6 +12,7 @@
 # under the License.
 
 import argparse
+import glob
 import os
 import re
 import six
@@ -32,13 +33,13 @@ def is_string(value):
 # list should contain only the alias name for the current branch.
 # This allows to avoid merging old templates versions aliases.
 valid_heat_template_versions = [
-  'rocky',
+  'wallaby',
 ]
 
 current_heat_template_version = valid_heat_template_versions[-1]
 
-required_params = ['EndpointMap', 'ServiceNetMap', 'DefaultPasswords',
-                   'RoleName', 'RoleParameters', 'ServiceData']
+required_params = ['EndpointMap', 'ServiceNetMap', 'RoleName',
+                   'RoleParameters', 'ServiceData']
 
 # NOTE(bnemec): The duplication in this list is intentional.  For the
 # transition to generated environments we have two copies of these files,
@@ -52,6 +53,10 @@ ENDPOINT_MAP_FILE = 'endpoint_map.yaml'
 OPTIONAL_SECTIONS = ['ansible_group_vars',
                      'cellv2_discovery',
                      'firewall_rules',
+                     'firewall_frontend_rules',
+                     'firewall_ssl_frontend_rules',
+                     'firewall_edge_frontend_rules',
+                     'firewall_edge_ssl_frontend_rules',
                      'keystone_resources']
 REQUIRED_DOCKER_SECTIONS = ['service_name', 'docker_config', 'puppet_config',
                             'config_settings']
@@ -60,9 +65,9 @@ OPTIONAL_DOCKER_SECTIONS = ['container_puppet_tasks', 'upgrade_tasks',
                             'pre_upgrade_rolling_tasks',
                             'post_upgrade_tasks', 'update_tasks',
                             'post_update_tasks', 'service_config_settings',
-                            'host_prep_tasks', 'metadata_settings',
-                            'kolla_config', 'global_config_settings',
-                            'external_deploy_tasks',
+                            'host_firewall_tasks', 'host_prep_tasks',
+                            'metadata_settings', 'kolla_config',
+                            'global_config_settings', 'external_deploy_tasks',
                             'external_post_deploy_tasks',
                             'container_config_scripts', 'step_config',
                             'monitoring_subscription', 'scale_tasks',
@@ -171,8 +176,6 @@ PARAMETER_DEFINITION_EXCLUSIONS = {
     'OctaviaWorkerLoggingSource': ['default'],
     'OvnMetadataAgentLoggingSource': ['default'],
     'PlacementLoggingSource': ['default'],
-    'SaharaApiLoggingSource': ['default'],
-    'SaharaEngineLoggingSource': ['default'],
     # There's one template that defines this
     # differently, and I'm not sure if we can
     # safely change it.
@@ -190,19 +193,9 @@ PARAMETER_DEFINITION_EXCLUSIONS = {
     'server': ['description'],
     'servers': ['description'],
     'ExtraConfig': ['description'],
-    'DefaultPasswords': ['description',
-                         'default'],
     'BondInterfaceOvsOptions': ['description',
                                 'default',
                                 'constraints'],
-    # NOTE(anil): This is a temporary change and
-    # will be removed once bug #1767070 properly
-    # fixed. OVN supports only VLAN, geneve
-    # and flat for NeutronNetworkType. But VLAN
-    # tenant networks have a limited support
-    # in OVN. Till that is fixed, we restrict
-    # NeutronNetworkType to 'geneve'.
-    'NeutronNetworkType': ['description', 'default', 'constraints'],
     'KeyName': ['constraints'],
     'OVNSouthboundServerPort': ['description'],
     'ExternalInterfaceDefaultRoute': ['description', 'default'],
@@ -259,6 +252,10 @@ VALIDATE_DOCKER_OVERRIDE = {
   './deployment/rabbitmq/rabbitmq-messaging-notify-shared-puppet.yaml': False,
   # Does not follow the filename pattern
   './deployment/multipathd/multipathd-container.yaml': True
+}
+VALIDATE_DOCKER_PUPPET_CONFIG_OVERRIDE = {
+    # inherits from nova-conductor
+  './deployment/nova/nova-manager-container-puppet.yaml': False,
 }
 DEPLOYMENT_RESOURCE_TYPES = [
     'OS::Heat::SoftwareDeploymentGroup',
@@ -335,13 +332,39 @@ def get_endpoint_map_from_env(filename):
     return None
 
 
+def compare_parameters(old_impl_path, new_impl_path):
+    old_impl_params = []
+    new_impl_params = []
+    for filename in glob.glob(old_impl_path + "/*.yaml"):
+        with open(filename, 'r') as f:
+            tpl = yaml.safe_load(f.read())
+            old_impl_params.extend(tpl["parameters"].keys())
+    for filename in glob.glob(new_impl_path + "/*.yaml"):
+        with open(filename, 'r') as f:
+            tpl = yaml.safe_load(f.read())
+            new_impl_params.extend(tpl["parameters"].keys())
+    return set(old_impl_params).difference(set(new_impl_params))
+
+
+def compare_ceph_parameters(path):
+    old_path = base_path + "/deployment/ceph-ansible/"
+    new_path = base_path + "/deployment/cephadm/"
+    missing = compare_parameters(old_path, new_path)
+    if missing:
+        print("ERROR: Some parameters are missing in Ceph implementation at"
+              "'%s' compared to that in '%s' and they are: %s" %
+              (new_path, old_path, missing))
+        return 1
+    return 0
+
+
 def validate_endpoint_map(base_map, env_map):
     return sorted(base_map.keys()) == sorted(env_map.keys())
 
 
 def validate_role_name(filename):
     with open(filename, 'r') as f:
-        tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        tpl = yaml.safe_load(f.read())
 
     role_data = tpl[0]
     if role_data['name'] != os.path.basename(filename).split('.')[0]:
@@ -357,7 +380,7 @@ def validate_hci_compute_services_default(env_filename, env_tpl):
     roles_filename = os.path.join(os.path.dirname(env_filename),
                                   '../roles/Compute.yaml')
     with open(roles_filename, 'r') as f:
-        roles_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        roles_tpl = yaml.safe_load(f.read())
 
     for role in roles_tpl:
         if role['name'] == 'Compute':
@@ -373,7 +396,7 @@ def validate_hci_computehci_role(hci_role_filename, hci_role_tpl):
     compute_role_filename = os.path.join(os.path.dirname(hci_role_filename),
                                          './Compute.yaml')
     with open(compute_role_filename, 'r') as f:
-        compute_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        compute_role_tpl = yaml.safe_load(f.read())
 
     compute_role_services = compute_role_tpl[0]['ServicesDefault']
     for role in hci_role_tpl:
@@ -391,29 +414,12 @@ def validate_controller_dashboard(filename, tpl):
     control_role_filename = os.path.join(os.path.dirname(filename),
                                          './Controller.yaml')
     with open(control_role_filename, 'r') as f:
-        control_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        control_role_tpl = yaml.safe_load(f.read())
 
     control_role_services = control_role_tpl[0]['ServicesDefault']
     for role in tpl:
         if role['name'] == 'ControllerStorageDashboard':
             services = role['ServicesDefault']
-            if sorted(services) != sorted(control_role_services):
-                print('ERROR: ServicesDefault in %s is different from '
-                      'ServicesDefault in roles/Controller.yaml' % filename)
-                return 1
-    return 0
-
-
-def validate_controller_storage_nfs(filename, tpl, exclude_service=()):
-    control_role_filename = os.path.join(os.path.dirname(filename),
-                                         './Controller.yaml')
-    with open(control_role_filename, 'r') as f:
-        control_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
-
-    control_role_services = control_role_tpl[0]['ServicesDefault']
-    for role in tpl:
-        if role['name'] == 'ControllerStorageNfs':
-            services = [x for x in role['ServicesDefault'] if (x not in exclude_service)]
             if sorted(services) != sorted(control_role_services):
                 print('ERROR: ServicesDefault in %s is different from '
                       'ServicesDefault in roles/Controller.yaml' % filename)
@@ -427,7 +433,7 @@ def validate_hci_role(hci_role_filename, hci_role_tpl):
         compute_role_filename = \
             os.path.join(os.path.dirname(hci_role_filename), './Compute.yaml')
         with open(compute_role_filename, 'r') as f:
-            compute_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+            compute_role_tpl = yaml.safe_load(f.read())
 
         compute_role_services = compute_role_tpl[0]['ServicesDefault']
         for role in hci_role_tpl:
@@ -466,7 +472,7 @@ def validate_ceph_role(ceph_role_filename, ceph_role_tpl):
         ceph_storage_role_filename = \
             os.path.join(os.path.dirname(ceph_role_filename), './CephStorage.yaml')
         with open(ceph_storage_role_filename, 'r') as f:
-            ceph_storage_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+            ceph_storage_role_tpl = yaml.safe_load(f.read())
 
         ceph_storage_role_services = ceph_storage_role_tpl[0]['ServicesDefault']
         for role in ceph_role_tpl:
@@ -497,17 +503,17 @@ def validate_controller_no_ceph_role(filename, tpl):
     control_role_filename = os.path.join(os.path.dirname(filename),
                                          './Controller.yaml')
     with open(control_role_filename, 'r') as f:
-        control_role_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        control_role_tpl = yaml.safe_load(f.read())
 
     control_role_services = control_role_tpl[0]['ServicesDefault']
     for role in tpl:
         if role['name'] == 'ControllerNoCeph':
             services = role['ServicesDefault']
-            services.remove('OS::TripleO::Services::CephClient')
             services.append('OS::TripleO::Services::CephMds')
             services.append('OS::TripleO::Services::CephMgr')
             services.append('OS::TripleO::Services::CephGrafana')
             services.append('OS::TripleO::Services::CephMon')
+            services.append('OS::TripleO::Services::CephNfs')
             services.append('OS::TripleO::Services::CephRbdMirror')
             services.append('OS::TripleO::Services::CephRgw')
             if sorted(services) != sorted(control_role_services):
@@ -521,7 +527,7 @@ def validate_with_compute_role_services(role_filename, role_tpl, exclude_service
     cmpt_filename = os.path.join(os.path.dirname(role_filename),
                                  './Compute.yaml')
     with open(cmpt_filename, 'r') as f:
-        cmpt_tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+        cmpt_tpl = yaml.safe_load(f.read())
 
     cmpt_services = cmpt_tpl[0]['ServicesDefault']
     cmpt_services = [x for x in cmpt_services if (x not in exclude_service)]
@@ -660,7 +666,7 @@ def validate_docker_service_mysql_usage(filename, tpl):
                     os.path.exists(newfilename.replace('.yaml', '.j2.yaml')):
                     return  # Skip for now if it's templated
                 with open(newfilename, 'r') as newfile:
-                    newtmp = yaml.load(newfile.read(), Loader=yaml.SafeLoader)
+                    newtmp = yaml.safe_load(newfile.read())
                 read_all(newfilename, newtmp)
 
     read_all(filename, tpl)
@@ -740,7 +746,9 @@ def validate_docker_service(filename, tpl):
                           % (section_name, filename))
                     return 1
 
-        if 'puppet_config' in role_data:
+        if 'puppet_config' in role_data and \
+                VALIDATE_DOCKER_PUPPET_CONFIG_OVERRIDE.get(filename, True) and \
+                role_data.get('puppet_config', {}) != {}:
             if validate_docker_service_mysql_usage(filename, tpl):
                 print('ERROR: could not validate use of mysql service for %s.'
                       % filename)
@@ -756,6 +764,8 @@ def validate_docker_service(filename, tpl):
                         print('ERROR: %s should not be in puppet_config section.'
                               % key)
                         return 1
+            if validate_ct_volumes(puppet_config.get('volumes')):
+                return 1
             for key in REQUIRED_DOCKER_PUPPET_CONFIG_SECTIONS:
                 if key not in puppet_config:
                     print('ERROR: %s is required in puppet_config for %s.'
@@ -793,6 +803,8 @@ def validate_docker_service(filename, tpl):
                         print('ERROR: bootstrap_host_exec needs to run '
                               'as the root user.')
                         return 1
+                    if validate_ct_volumes(container.get('volumes')):
+                        return 1
 
         if 'upgrade_tasks' in role_data and role_data['upgrade_tasks']:
             if (validate_upgrade_tasks(role_data['upgrade_tasks']) or
@@ -807,6 +819,38 @@ def validate_docker_service(filename, tpl):
                       % (param, filename))
                 return 1
     return 0
+
+
+def validate_ct_volumes(volumes):
+    '''Ensure we don't have any trailing "/" in the volume'''
+    if not volumes:
+        return 0
+    if isinstance(volumes, list):
+        # Plain list without much complications
+        for vol in volumes:
+            if isinstance(vol, dict):
+                # Avoid 'if'
+                continue
+            vol_def = vol.split(':')
+            if vol_def[0][-1] == '/' or vol_def[1][-1] == '/':
+                print('ERROR: trailing "/" detected for {}'.format(vol))
+                return 1
+        return 0
+
+    ret = 0
+    if isinstance(volumes, dict):
+        # We probably face a list_concat thing. Clean and re-run!
+        # First avoid the get_attr.
+        if 'get_attr' in list(volumes.keys()):
+            return 0
+        if 'list_concat' in list(volumes.keys()):
+            for vol in volumes['list_concat']:
+                if isinstance(vol, dict):
+                    continue
+                ret += validate_ct_volumes(vol)
+            return ret
+    print('ERROR: unknown "volumes" type: {}'.format(volumes))
+    return 1
 
 
 def validate_docker_logging_template(filename, tpl):
@@ -989,12 +1033,14 @@ def validate_service_hiera_interpol(f, tpl):
             # Omit if external deploy tasks in the path
             if 'external_deploy_tasks' in path:
                 continue
+            # Omit if deploy steps tasks in the path
+            if 'deploy_steps_tasks' in path:
+                continue
             # Omit apache remoteip proxy_ips
             if 'apache::mod::remoteip::proxy_ips' in path:
                 continue
             # Omit Designate rndc_allowed_addressses
-            if ('tripleo::profile::base::designate::rndc_allowed_addresses' in
-                    path):
+            if ('rndc_allowed_addresses' in path):
                 continue
             # Omit Neutron ml2 overlay_ip_version
             if 'neutron::plugins::ml2::overlay_ip_version' in path:
@@ -1117,7 +1163,7 @@ def validate(filename, param_map):
     retval = 0
     try:
         with open(filename, 'r') as f:
-            tpl = yaml.load(f.read(), Loader=yaml.SafeLoader)
+            tpl = yaml.safe_load(f.read())
 
         is_heat_template = 'heat_template_version' in tpl
 
@@ -1174,19 +1220,14 @@ def validate(filename, param_map):
                 filename.startswith('./roles/ComputeHCISriov.yaml'):
             retval |= validate_hci_computehci_role(filename, tpl)
 
-        if filename.startswith('./roles/ControllerStorageNfs.yaml'):
-            exclude = [
-                'OS::TripleO::Services::CephNfs']
-            retval |= validate_controller_storage_nfs(filename, tpl, exclude)
-
         if filename.startswith('./roles/ControllerStorageDashboard.yaml'):
             retval |= validate_controller_dashboard(filename, tpl)
-
-        if filename.startswith('./roles/ComputeOvsDpdk.yaml') or \
-                filename.startswith('./roles/ComputeSriov.yaml') or \
-                filename.startswith('./roles/ComputeOvsDpdkRT.yaml') or \
-                filename.startswith('./roles/ComputeSriovRT.yaml') or \
-                filename.startswith('./roles/ComputeHCIOvsDpdk.yaml'):
+        if filename in ['./roles/ComputeOvsDpdk.yaml',
+                        './roles/ComputeSriov.yaml',
+                        './roles/ComputeOvsDpdkRT.yaml',
+                        './roles/ComputeSriovRT.yaml',
+                        './roles/ComputeHCIOvsDpdk.yaml',
+                        './roles/ComputeVdpa.yaml']:
             exclude = [
                 'OS::TripleO::Services::OVNController',
                 'OS::TripleO::Services::ComputeNeutronOvsAgent',
@@ -1223,7 +1264,8 @@ def validate(filename, param_map):
         # definition instead.
         if (filename.startswith('./network_data_') and
                 not filename.endswith(('routed.yaml',
-                                       'undercloud.yaml'))):
+                                       'undercloud.yaml',
+                                       'default.yaml'))):
             result = validate_network_data_file(filename)
             retval |= result
         else:
@@ -1310,11 +1352,11 @@ def validate_upgrade_tasks(upgrade_tasks):
 def validate_network_data_file(data_file_path):
     try:
         with open(data_file_path, 'r') as data_file:
-            data_file = yaml.load(data_file.read(), Loader=yaml.SafeLoader)
+            data_file = yaml.safe_load(data_file.read())
 
         base_file_path = os.path.dirname(data_file_path) + "/network_data.yaml"
         with open(base_file_path, 'r') as base_file:
-            base_file = yaml.load(base_file.read(), Loader=yaml.SafeLoader)
+            base_file = yaml.safe_load(base_file.read())
 
         retval = 0
         for n in base_file:
@@ -1372,11 +1414,15 @@ param_map = {}
 
 for base_path in path_args:
     if os.path.isdir(base_path):
+        exit_val |= compare_ceph_parameters(base_path)
         for subdir, dirs, files in os.walk(base_path):
             if '.tox' in dirs:
                 dirs.remove('.tox')
             for f in files:
                 file_path = os.path.join(subdir, f)
+                if 'tools/tests/nic_config_convert_samples' in file_path:
+                    continue
+
                 if 'environments/services-docker' in file_path:
                     print("ERROR: environments/services-docker should not be "
                           "used any more, use environments/services instead: "

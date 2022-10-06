@@ -1,6 +1,3 @@
-resource_registry:
-  OS::TripleO::Services::OVNDBs: ../../deployment/ovn/ovn-dbs-pacemaker-puppet.yaml
-
 parameter_defaults:
   ControllerNetworkConfigTemplate: 'templates/ci/multinode.j2'
   ComputeNetworkConfigTemplate: 'templates/ci/multinode.j2'
@@ -42,6 +39,7 @@ parameter_defaults:
     - OS::TripleO::Services::Multipathd
     - OS::TripleO::Services::Pacemaker
     - OS::TripleO::Services::Clustercheck
+    - OS::TripleO::Services::NovaManager
   ControllerExtraConfig:
     nova::compute::libvirt::services::libvirt_virt_type: qemu
     nova::compute::libvirt::virt_type: qemu

@@ -44,10 +44,6 @@ parameter_defaults:
   # Type: comma_delimited_list
   NtpServer: ['0.pool.ntp.org', '1.pool.ntp.org', '2.pool.ntp.org', '3.pool.ntp.org']
 
-  # How the server should receive the metadata required for software configuration.
-  # Type: string
-  SoftwareConfigTransport: POLL_SERVER_HEAT
-
   # Set this to true to open up ssh access from all sources.
   # Type: boolean
   SshFirewallAllowAll: True
@@ -62,10 +58,6 @@ parameter_defaults:
 
 resource_registry:
   OS::TripleO::Network::Ports::ControlPlaneVipPort: ../../deployed-server/deployed-neutron-port.yaml
-  OS::TripleO::Network::Ports::OVNDBsVipPort: ../../network/ports/noop.yaml
-  OS::TripleO::Network::Ports::RedisVipPort: ../../network/ports/noop.yaml
-  OS::TripleO::OVNMacAddressNetwork: OS::Heat::None
-  OS::TripleO::OVNMacAddressPort: OS::Heat::None
   OS::TripleO::Services::AodhApi: OS::Heat::None
   OS::TripleO::Services::AodhEvaluator: OS::Heat::None
   OS::TripleO::Services::AodhListener: OS::Heat::None
@@ -85,6 +77,7 @@ resource_registry:
   OS::TripleO::Services::DesignateProducer: OS::Heat::None
   OS::TripleO::Services::DesignateSink: OS::Heat::None
   OS::TripleO::Services::DesignateWorker: OS::Heat::None
+  OS::TripleO::Services::DesignateBind: OS::Heat::None
   OS::TripleO::Services::Docker: OS::Heat::None
   OS::TripleO::Services::DockerRegistry: ../../deployment/image-serve/image-serve-baremetal-ansible.yaml
   OS::TripleO::Services::GnocchiApi: OS::Heat::None
@@ -104,22 +97,14 @@ resource_registry:
   OS::TripleO::Services::ManilaBackendCephFs: OS::Heat::None
   OS::TripleO::Services::ManilaBackendIsilon: OS::Heat::None
   OS::TripleO::Services::ManilaBackendNetapp: OS::Heat::None
+  OS::TripleO::Services::ManilaBackendPowerMax: OS::Heat::None
   OS::TripleO::Services::ManilaBackendUnity: OS::Heat::None
   OS::TripleO::Services::ManilaBackendVMAX: OS::Heat::None
   OS::TripleO::Services::ManilaBackendVNX: OS::Heat::None
   OS::TripleO::Services::ManilaScheduler: OS::Heat::None
   OS::TripleO::Services::ManilaShare: OS::Heat::None
-  OS::TripleO::Services::MistralApi: OS::Heat::None
-  OS::TripleO::Services::MistralEngine: OS::Heat::None
-  OS::TripleO::Services::MistralEventEngine: OS::Heat::None
-  OS::TripleO::Services::MistralExecutor: OS::Heat::None
-  OS::TripleO::Services::OVNDBs: ../../deployment/ovn/ovn-dbs-pacemaker-puppet.yaml
   OS::TripleO::Services::OpenStackClients: ../../deployment/clients/openstack-clients-baremetal-ansible.yaml
   OS::TripleO::Services::Podman: ../../deployment/podman/podman-baremetal-ansible.yaml
-  OS::TripleO::Services::Rear: OS::Heat::None
   OS::TripleO::Services::Redis: OS::Heat::None
   OS::TripleO::Services::Rsyslog: ../../deployment/logging/rsyslog-baremetal-ansible.yaml
-  OS::TripleO::Services::SaharaApi: OS::Heat::None
-  OS::TripleO::Services::SaharaEngine: OS::Heat::None
   OS::TripleO::Services::Tmpwatch: ../../deployment/logrotate/tmpwatch-install.yaml
-  OS::TripleO::Services::Zaqar: OS::Heat::None

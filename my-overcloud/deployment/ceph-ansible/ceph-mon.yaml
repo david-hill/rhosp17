@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Ceph Monitor service.
@@ -11,11 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -42,9 +39,15 @@ parameters:
     type: boolean
     default: false
     description: Parameter used to trigger the dashboard deployment.
-
-conditions:
-  dashboard_enabled: {equals: [{get_param: CephEnableDashboard}, true]}
+  CephClusterName:
+    type: string
+    default: ceph
+    description: The Ceph cluster name.
+    constraints:
+    - allowed_pattern: "[a-zA-Z0-9]+"
+      description: >
+        The Ceph cluster name must be at least 1 character and contain only
+        letters and numbers.
 
 resources:
   CephBase:
@@ -52,17 +55,9 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-
-  CephMonAnsibleVars:
-    type: OS::Heat::Value
-    properties:
-      type: json
-      value:
-        vars: {}
 
 outputs:
   role_data:
@@ -76,9 +71,8 @@ outputs:
               - - 6789
               - - 3300
               - if:
-                - dashboard_enabled
+                - {get_param: CephEnableDashboard}
                 - - '9100'
-                - []
       service_config_settings:
         collectd:
           tripleo.collectd.plugins.ceph_osd:
@@ -86,10 +80,7 @@ outputs:
           collectd::plugin::ceph::daemons: []
       upgrade_tasks: {get_attr: [CephBase, role_data, upgrade_tasks]}
       post_upgrade_tasks: {get_attr: [CephBase, role_data, post_upgrade_tasks]}
-      puppet_config:
-        config_image: ''
-        config_volume: ''
-        step_config: ''
+      puppet_config: {}
       docker_config: {}
       external_deploy_tasks:
         list_concat:
@@ -98,12 +89,11 @@ outputs:
             when: step|int == 1
             tags:
               - ceph
-              - ceph_fstobs
-              - ceph_systemd
+              - cephadm_adopt
             block:
               - name: set ceph-ansible group vars mons
                 set_fact:
-                  ceph_ansible_group_vars_mons: {get_attr: [CephMonAnsibleVars, value, vars]}
+                  ceph_ansible_group_vars_mons: {}
               - name: generate ceph-ansible group vars mons
                 copy:
                   dest: "{{playbook_dir}}/ceph-ansible/group_vars/mons.yml"

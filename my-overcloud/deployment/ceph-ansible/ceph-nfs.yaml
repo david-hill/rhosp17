@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Ceph NFS Ganeshaservice.
@@ -11,11 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -33,6 +30,13 @@ parameters:
   ManilaCephFSCephFSAuthId:
     type: string
     default: 'manila'
+  ManilaCephFSNFSIdmapConf:
+    type: string
+    default: '/etc/ganesha/idmap.conf'
+  ManilaCephFSNFSIdmapOverrides:
+    type: json
+    description: Extra config settings to dump into idmap.conf
+    default: {}
 
 resources:
   CephBase:
@@ -40,26 +44,9 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
-
-  CephNfsAnsibleVars:
-    type: OS::Heat::Value
-    properties:
-      type: json
-      value:
-        vars:
-          ceph_nfs_bind_addr: {get_param: [EndpointMap, GaneshaInternal, host_nobrackets]}
-          ceph_nfs_enable_service: false
-          ceph_nfs_use_pacemaker: true
-          ceph_nfs_dynamic_exports: true
-          ceph_nfs_service_suffix: pacemaker
-          nfs_obj_gw: false
-          ceph_nfs_rados_backend: true
-          ceph_nfs_disable_caching: true
-          ceph_nfs_ceph_user: {get_param: ManilaCephFSCephFSAuthId}
 
 outputs:
   role_data:
@@ -115,10 +102,7 @@ outputs:
                 tripleo_upgrade_key: ceph_nfs_short_node_names_override
               when: ceph_nfs_short_node_names_upgraded | length == ceph_nfs_short_node_names | length
       step_config: 'include tripleo::profile::pacemaker::ceph_nfs'
-      puppet_config:
-        config_image: ''
-        config_volume: ''
-        step_config: ''
+      puppet_config: {}
       # step_config seems to be ignored if docker_config is present
       #docker_config: {}
       external_deploy_tasks:
@@ -128,12 +112,22 @@ outputs:
             when: step|int == 1
             tags:
               - ceph
-              - ceph_fstobs
-              - ceph_systemd
+              - cephadm_adopt
             block:
               - name: set ceph-ansible group vars nfss
                 set_fact:
-                  ceph_ansible_group_vars_nfss: {get_attr: [CephNfsAnsibleVars, value, vars]}
+                  ceph_ansible_group_vars_nfss:
+                    ceph_nfs_bind_addr: {get_param: [EndpointMap, GaneshaInternal, host_nobrackets]}
+                    ceph_nfs_enable_service: false
+                    ceph_nfs_use_pacemaker: true
+                    ceph_nfs_dynamic_exports: true
+                    ceph_nfs_service_suffix: pacemaker
+                    nfs_obj_gw: false
+                    ceph_nfs_rados_backend: true
+                    ceph_nfs_disable_caching: true
+                    ceph_nfs_ceph_user: {get_param: ManilaCephFSCephFSAuthId}
+                    ceph_nfs_idmap_conf: {get_param: ManilaCephFSNFSIdmapConf}
+                    ceph_nfs_idmap_overrides: {get_param: ManilaCephFSNFSIdmapOverrides}
               - name: generate ceph-ansible group vars nfss
                 copy:
                   dest: "{{playbook_dir}}/ceph-ansible/group_vars/nfss.yml"

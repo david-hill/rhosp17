@@ -1,4 +1,4 @@
-#!/usr/libexec/platform-python
+#!/usr/bin/python3
 #
 # Copyright 2017 Red Hat, Inc.
 #

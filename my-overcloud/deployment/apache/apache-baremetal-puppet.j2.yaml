@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Apache service configured with Puppet. Note this is typically included
@@ -20,11 +20,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -47,13 +44,27 @@ parameters:
     type: string
     description: Specifies the default CA cert to use if TLS is used for
                  services in the internal network.
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  ApacheCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
+  ApacheTimeout:
+    type: number
+    default: 90
+    description: The timeout in seconds for Apache, which defines duration
+                 Apache waits for I/O operations
 
 conditions:
-
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
+  key_size_override_set:
+    not: {equals: [{get_param: ApacheCertificateKeySize}, '']}
 
 resources:
-
   ApacheNetworks:
     type: OS::Heat::Value
     properties:
@@ -61,11 +72,12 @@ resources:
         # NOTE(xek) Get unique network names to create certificates.
         # We skip the tenant and management network (vip != false)
         # since we don't generate certificates for those.
-        - ctlplane
-{%- for network in networks if network.enabled|default(true) %}
-  {%- if network.vip | default(false) %}
-        - {{network.name_lower}}
-  {%- endif %}
+{%- for role in roles %}
+        {{ role.name }}:
+            - ctlplane
+{%- for network in networks if network.name in role.networks and network.enabled|default(true) and network.vip|default(false) %}
+            - {{network.name_lower}}
+{%- endfor %}
 {%- endfor %}
 
 outputs:
@@ -75,12 +87,11 @@ outputs:
       service_name: apache
       config_settings:
         map_merge:
-          -
             # for the given network; replacement examples (eg. for internal_api):
             # internal_api -> IP
             # internal_api_uri -> [IP]
             # internal_api_subnet - > IP/CIDR
-            apache::ip:
+          - apache::ip:
               str_replace:
                 template:
                   "%{hiera('$NETWORK')}"
@@ -90,6 +101,7 @@ outputs:
             apache::trace_enable: 'Off'
             apache::server_signature: 'Off'
             apache::server_tokens: 'Prod'
+            apache::timeout: {get_param: ApacheTimeout}
             apache::mod::prefork::maxrequestworkers: { get_param: ApacheMaxRequestWorkers }
             apache::mod::prefork::serverlimit: { get_param: ApacheServerLimit }
             apache::mod::remoteip::proxy_ips:
@@ -99,13 +111,9 @@ outputs:
                 - {get_param: [ServiceNetMap, ApacheNetwork]}
             apache::mod::alias::icons_options: 'None'
           - if:
-            - internal_tls_enabled
-            -
-              generate_service_certificates: true
-              apache::mod::ssl::ssl_ca: {get_param: InternalTLSCAFile}
+            - {get_param: EnableInternalTLS}
+            - apache::mod::ssl::ssl_ca: {get_param: InternalTLSCAFile}
               apache::mod::ssl::ssl_protocol: ['all', '-SSLv2', '-SSLv3', '-TLSv1']
-              tripleo::certmonger::apache_dirs::certificate_dir: '/etc/pki/tls/certs/httpd'
-              tripleo::certmonger::apache_dirs::key_dir: '/etc/pki/tls/private/httpd'
               apache_certificates_specs:
                 map_merge:
                   repeat:
@@ -113,22 +121,53 @@ outputs:
                       httpd-NETWORK:
                         service_certificate: '/etc/pki/tls/certs/httpd/httpd-NETWORK.crt'
                         service_key: '/etc/pki/tls/private/httpd/httpd-NETWORK.key'
-                        hostname: "%{hiera('fqdn_NETWORK')}"
-                        principal: "HTTP/%{hiera('fqdn_NETWORK')}"
-                        postsave_cmd: "pkill -USR1 httpd"
                     for_each:
-                      NETWORK: {get_attr: [ApacheNetworks, value]}
-            - {}
+                      NETWORK: {get_attr: [ApacheNetworks, value, { get_param: RoleName }]}
       metadata_settings:
         if:
-          - internal_tls_enabled
-          -
-            repeat:
+          - {get_param: EnableInternalTLS}
+          - repeat:
               template:
                 - service: HTTP
                   network: $NETWORK
                   type: node
               for_each:
-                $NETWORK: {get_attr: [ApacheNetworks, value]}
-          - null
+                $NETWORK: {get_attr: [ApacheNetworks, value, { get_param: RoleName }]}
       upgrade_tasks: []
+      deploy_steps_tasks:
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - name: Create dirs for certificates and keys
+              file:
+                path: "{% raw %}{{ item }}{% endraw %}"
+                state: directory
+                serole: object_r
+                setype: cert_t
+                seuser: system_u
+              with_items:
+                - '/etc/pki/tls/certs/httpd'
+                - '/etc/pki/tls/private/httpd'
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  repeat:
+                    template:
+                      name: httpd-NETWORK
+                      dns: "{% raw %}{{ fqdn_NETWORK }}{% endraw %}"
+                      principal: "{% raw %}HTTP/{{ fqdn_NETWORK }}@{{ idm_realm }}{% endraw %}"
+                      run_after: |
+                        cp /etc/pki/tls/certs/httpd-NETWORK.crt /etc/pki/tls/certs/httpd/httpd-NETWORK.crt
+                        cp /etc/pki/tls/private/httpd-NETWORK.key /etc/pki/tls/private/httpd/httpd-NETWORK.key
+                        pkill -USR1 httpd
+                      key_size:
+                        if:
+                          - key_size_override_set
+                          - {get_param: ApacheCertificateKeySize}
+                          - {get_param: CertificateKeySize}
+                      ca: ipa
+                    for_each:
+                      NETWORK: {get_attr: [ApacheNetworks, value, { get_param: RoleName }]}

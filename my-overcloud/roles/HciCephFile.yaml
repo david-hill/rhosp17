@@ -29,13 +29,13 @@
     - OS::TripleO::Services::CephExternal
     - OS::TripleO::Services::CephMds
     - OS::TripleO::Services::CephOSD
-    - OS::TripleO::Services::CertmongerUser
     - OS::TripleO::Services::Collectd
     - OS::TripleO::Services::ComputeCeilometerAgent
     - OS::TripleO::Services::ComputeNeutronCorePlugin
     - OS::TripleO::Services::ComputeNeutronL3Agent
     - OS::TripleO::Services::ComputeNeutronMetadataAgent
     - OS::TripleO::Services::ComputeNeutronOvsAgent
+    - OS::TripleO::Services::Frr
     - OS::TripleO::Services::IpaClient
     - OS::TripleO::Services::Ipsec
     - OS::TripleO::Services::Iscsid
@@ -54,7 +54,6 @@
     - OS::TripleO::Services::NovaMigrationTarget
     - OS::TripleO::Services::ContainersLogrotateCrond
     - OS::TripleO::Services::Podman
-    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
     - OS::TripleO::Services::RsyslogSidecar

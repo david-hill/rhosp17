@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 description: 'Generates the relevant service principals for a {{role.name}} server'
 
 parameters:
@@ -55,17 +55,13 @@ resources:
           # 'metadata_settings', get the values from that key and get the
           # unique ones. Also, filter values for networks not associated with
           # this role.
-          expression: let(role_networks => $.data.role_networks) -> list(coalesce($.data.role_data, []).where($ != null).where($.containsKey('metadata_settings')).metadata_settings.flatten().distinct().where($ != null and $.containsKey('network')).where($role_networks.contains($.network)))
+          expression: let(role_networks => $.data.role_networks) -> list(coalesce($.data.role_data, []).where($ != null).where($.containsKey('metadata_settings')).metadata_settings.flatten().distinct().where($ != null and $.containsKey('network')).where($role_networks.contains($.network))).flatten()
           data:
             role_data: {get_param: RoleData}
             role_networks:
               - ctlplane
 {%- for network in networks if network.name in role.networks %}
-  {%- if network.service_net_map_replace is defined %}
-              - {{network.service_net_map_replace}}
-  {%- else %}
               - {{network.name_lower}}
-  {%- endif %}
 {%- endfor %}
 
   # Generates entries for nova metadata with the following format:
@@ -82,29 +78,13 @@ resources:
             fqdns:
 {%- for network in networks if network.vip|default(false) and network.name in role.networks %}
 {%- if network.name == 'External' %}
-  {%- if network.service_net_map_replace is defined %}
-              {{network.service_net_map_replace}}: {get_param: CloudName}
-  {%- else %}
               {{network.name_lower}}: {get_param: CloudName}
-  {%- endif %}
 {%- elif network.name == 'InternalApi' %}
-  {%- if network.service_net_map_replace is defined %}
-              {{network.service_net_map_replace}}: {get_param: CloudNameInternal}
-  {%- else %}
               {{network.name_lower}}: {get_param: CloudNameInternal}
-  {%- endif %}
 {%- elif network.name == 'StorageMgmt' %}
-  {%- if network.service_net_map_replace is defined %}
-              {{network.service_net_map_replace}}: {get_param: CloudNameStorageManagement}
-  {%- else %}
               {{network.name_lower}}: {get_param: CloudNameStorageManagement}
-  {%- endif %}
 {%- else %}
-  {%- if network.service_net_map_replace is defined %}
-              {{network.service_net_map_replace}}: {get_param: CloudName{{network.name}}}
-  {%- else %}
               {{network.name_lower}}: {get_param: CloudName{{network.name}}}
-  {%- endif %}
 {%- endif %}
 {%- endfor %}
               ctlplane: {get_param: CloudNameCtlplane}

@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Ceilometer Agent Notification service
@@ -27,11 +27,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -78,8 +75,6 @@ parameters:
     description: >
         A list of publishers to put in event_pipeline.yaml. When the
         collector is used, override this with notifier:// publisher.
-        If zaqar is enabled, you can also publish to a zaqar queue
-        by including "zaqar://?queue=queue_name" in this list.
         Set ManageEventPipeline to true for override to take effect.
     type: comma_delimited_list
   ManagePipeline:
@@ -103,7 +98,6 @@ resources:
     properties:
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       EndpointMap: {get_param: EndpointMap}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
@@ -111,8 +105,8 @@ resources:
 conditions:
   ceilometer_qdr_publish:
     or:
-      - {equals: [{get_param: CeilometerQdrPublishEvents}, true]}
-      - {equals: [{get_param: CeilometerQdrPublishMetrics}, true]}
+      - {get_param: CeilometerQdrPublishEvents}
+      - {get_param: CeilometerQdrPublishMetrics}
 
 outputs:
   role_data:
@@ -146,7 +140,6 @@ outputs:
                             params:
                               ROLENAME: {get_param: RoleName}
               tripleo::profile::base::ceilometer::agent::notification::notifier_host_port: {get_param: MetricsQdrPort}
-            - {}
       service_config_settings:
         map_merge:
           - get_attr: [CeilometerServiceBase, role_data, service_config_settings]
@@ -190,8 +183,7 @@ outputs:
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/ceilometer_agent_notification.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/ceilometer_agent_notification.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/ceilometer:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/ceilometer:/var/log/ceilometer:z
             environment:
@@ -208,8 +200,11 @@ outputs:
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink
-            persistent: yes
-            state: yes
+            persistent: true
+            state: true
+          when:
+            - ansible_facts.selinux is defined
+            - ansible_facts.selinux.status == "enabled"
       external_upgrade_tasks:
         - when:
             - step|int == 1

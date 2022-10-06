@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 parameters:
   EndpointMap:
@@ -13,11 +13,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -45,6 +42,16 @@ parameters:
     type: string
     description: Specifies the default CA cert to use if TLS is used for
                  services in the internal network.
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  OctaviaCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
 
 conditions:
 
@@ -52,6 +59,7 @@ conditions:
   is_ovn_in_neutron_mechanism_driver: {contains: ['ovn', {get_param: NeutronMechanismDrivers}]}
   ovn_and_tls: {and: [is_ovn_in_neutron_mechanism_driver, internal_tls_enabled]}
   octavia_provider_ovn_protocol_unset: {equals: [{get_param: OctaviaOvnProviderProtocol}, '']}
+  key_size_override_unset: {equals: [{get_param: OctaviaCertificateKeySize}, '']}
 
 outputs:
   role_data:
@@ -59,34 +67,26 @@ outputs:
     value:
       config_settings:
         map_merge:
-            -
-              if:
-                - octavia_provider_ovn_protocol_unset
-                - if:
-                  - internal_tls_enabled
-                  - tripleo::profile::base::octavia::provider::ovn::protocol: 'ssl'
-                  - tripleo::profile::base::octavia::provider::ovn::protocol: 'tcp'
-                - tripleo::profile::base::octavia::provider::ovn::protocol: {get_param: OctaviaOvnProviderProtocol}
-            - if:
-              - ovn_and_tls
-              - tripleo::profile::base::octavia::provider::ovn::ovn_nb_ca_cert: {get_param: InternalTLSCAFile}
-                tripleo::profile::base::octavia::provider::ovn::ovn_nb_certificate: '/etc/pki/tls/certs/ovn_octavia.crt'
-                tripleo::profile::base::octavia::provider::ovn::ovn_nb_private_key: '/etc/pki/tls/private/ovn_octavia.key'
-                generate_service_certificates: true
-                ovn_octavia_certificate_specs:
-                  service_certificate: '/etc/pki/tls/certs/ovn_octavia.crt'
-                  service_key: '/etc/pki/tls/private/ovn_octavia.key'
-                  hostname:
-                    str_replace:
-                      template: "%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
-                  principal:
-                    str_replace:
-                      template: "ovn_octavia/%{hiera('fqdn_NETWORK')}"
-                      params:
-                        NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+          - if:
+              - is_ovn_in_neutron_mechanism_driver
+              - octavia::driver_agent::enabled_provider_agents: 'ovn'
               - {}
+          - if:
+              - octavia_provider_ovn_protocol_unset
+              - if:
+                - internal_tls_enabled
+                - tripleo::profile::base::octavia::provider::ovn::protocol: 'ssl'
+                - tripleo::profile::base::octavia::provider::ovn::protocol: 'tcp'
+              - tripleo::profile::base::octavia::provider::ovn::protocol: {get_param: OctaviaOvnProviderProtocol}
+          - if:
+            - ovn_and_tls
+            - tripleo::profile::base::octavia::provider::ovn::ovn_nb_ca_cert: {get_param: InternalTLSCAFile}
+              tripleo::profile::base::octavia::provider::ovn::ovn_nb_certificate: '/etc/pki/tls/certs/ovn_octavia.crt'
+              tripleo::profile::base::octavia::provider::ovn::ovn_nb_private_key: '/etc/pki/tls/private/ovn_octavia.key'
+              tripleo::profile::base::octavia::provider::ovn::ovn_sb_ca_cert: {get_param: InternalTLSCAFile}
+              tripleo::profile::base::octavia::provider::ovn::ovn_sb_certificate: '/etc/pki/tls/certs/ovn_octavia.crt'
+              tripleo::profile::base::octavia::provider::ovn::ovn_sb_private_key: '/etc/pki/tls/private/ovn_octavia.key'
+            - {}
       puppet_tags: octavia_ovn_provider_config
       provider_driver_labels:
         if:
@@ -132,3 +132,32 @@ outputs:
               merge: true
               preserve_properties: true
           - []
+      deploy_steps_tasks:
+        if:
+          - ovn_and_tls
+          -
+            - name: Certificate generation
+              when: step|int == 1
+              block:
+                - include_role:
+                    name: linux-system-roles.certificate
+                  vars:
+                    certificate_requests:
+                      - name: ovn_octavia
+                        dns:
+                          str_replace:
+                            template: "{{fqdn_$NETWORK}}"
+                            params:
+                              $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                        principal:
+                          str_replace:
+                            template: "ovn_octavia/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                            params:
+                              $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                        key_size:
+                          if:
+                            - key_size_override_unset
+                            - {get_param: CertificateKeySize}
+                            - {get_param: OctaviaCertificateKeySize}
+                        ca: ipa
+          - null

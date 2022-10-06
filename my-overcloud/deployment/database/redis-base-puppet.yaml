@@ -1,9 +1,12 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Redis service configured with Puppet
 
 parameters:
+  RootStackName:
+    description: The name of the stack/plan.
+    type: string
   RedisPassword:
     description: The password for the redis service account.
     type: string
@@ -19,11 +22,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -45,6 +45,15 @@ parameters:
     default: false
     description: Enable IPv6 in Redis
     type: boolean
+  RedisVirtualFixedIPs:
+    default: []
+    description: >
+        Control the IP allocation for the virtual IP used by Redis. E.g.
+        [{'ip_address':'1.2.3.4'}]
+    type: json
+  ServiceVips:
+    default: {}
+    type: json
 
 parameter_groups:
 - label: deprecated
@@ -57,11 +66,20 @@ parameter_groups:
   - RedisIPv6
 
 conditions:
-  use_tls_proxy: {equals : [{get_param: EnableInternalTLS}, true]}
   is_ipv6:
     equals:
       - {get_param: [ServiceData, net_ip_version_map, {get_param: [ServiceNetMap, RedisNetwork]}]}
       - 6
+  redis_virtual_fixed_ip_set:
+    not:
+      equals:
+        - get_param: RedisVirtualFixedIPs
+        - []
+  redis_service_vip_set:
+    not:
+      equals:
+        - get_param: [ServiceVips, redis]
+        - ''
 
 outputs:
   role_data:
@@ -82,7 +100,7 @@ outputs:
         # proxy in front.
         redis::bind:
           if:
-          - use_tls_proxy
+          - {get_param: EnableInternalTLS}
           - if:
             - is_ipv6
             - '::1'
@@ -98,7 +116,7 @@ outputs:
         redis::sentinel::notification_script: '/usr/local/bin/redis-notifications.sh'
         redis::sentinel::sentinel_bind:
           if:
-          - use_tls_proxy
+          - {get_param: EnableInternalTLS}
           - if:
             - is_ipv6
             - '::1'
@@ -109,3 +127,22 @@ outputs:
               params:
                 $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
         redis::ulimit: {get_param: RedisFDLimit}
+      external_deploy_tasks:
+        - when:
+            - step|int == 0
+          name: redis_external_deploy_init
+          block:
+            - name: create redis virtual ip
+              tripleo_service_vip:
+                playbook_dir: "{{ playbook_dir }}"
+                stack_name: {get_param: RootStackName}
+                service_name: redis
+                network: {get_param: [ServiceNetMap, RedisNetwork]}
+                fixed_ips:
+                  if:
+                    - redis_virtual_fixed_ip_set
+                    - {get_param: RedisVirtualFixedIPs}
+                    - if:
+                        - redis_service_vip_set
+                        - [{ip_address: {get_param: [ServiceVips, redis]}}]
+                        - [{subnet: {get_param: [ServiceData, vip_subnet_map, redis]}}]

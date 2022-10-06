@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized novajoin service
@@ -21,15 +21,12 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   ServiceData:
     default: {}
     description: Dictionary packing service data
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -83,6 +80,11 @@ parameters:
       A hash of policies to configure for Novajoin.
     default: {}
     type: json
+  MemcacheUseAdvancedPool:
+    type: boolean
+    description: |
+      Use the advanced (eventlet safe) memcached client pool.
+    default: true
 
 resources:
 
@@ -130,11 +132,12 @@ outputs:
         # kerberos via puppet.
         nova::metadata::novajoin::api::configure_kerberos: true
         nova::metadata::novajoin::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-        nova::metadata::novajoin::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+        nova::metadata::novajoin::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystonePublic, uri_no_suffix]}
         nova::metadata::novajoin::authtoken::password: {get_param: NovajoinPassword}
         nova::metadata::novajoin::authtoken::project_name: 'service'
         nova::metadata::novajoin::authtoken::region_name: {get_param: KeystoneRegion}
         nova::metadata::novajoin::authtoken::interface: 'internal'
+        nova::metadata::novajoin::authtoken::memcache_use_advanced_pool: {get_param: MemcacheUseAdvancedPool}
         nova::metadata::novajoin::policy::policies: {get_param: NovajoinPolicies}
       service_config_settings:
         nova_metadata: &nova_vendordata
@@ -208,7 +211,7 @@ outputs:
                 -
                   - /var/lib/kolla/config_files/novajoin_server.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/novajoin:/var/lib/kolla/config_files/src:ro
-                  - /etc/ipa/:/etc/ipa/:ro
+                  - /etc/ipa:/etc/ipa:ro
                   - /etc/novajoin/krb5.keytab:/etc/novajoin/krb5.keytab:ro
                   - /var/log/containers/novajoin:/var/log/novajoin
             environment:
@@ -226,7 +229,7 @@ outputs:
                 -
                   - /var/lib/kolla/config_files/novajoin_notifier.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/novajoin:/var/lib/kolla/config_files/src:ro
-                  - /etc/ipa/:/etc/ipa/:ro
+                  - /etc/ipa:/etc/ipa:ro
                   - /etc/novajoin/krb5.keytab:/etc/novajoin/krb5.keytab:ro
                   - /var/log/containers/novajoin:/var/log/novajoin
             environment:
@@ -238,8 +241,8 @@ outputs:
         # openssl-perl is installed which provides /etc/pki/CA on RHEL8
         - name: Ensure openssl-perl package is present on RHEL8
           when:
-            - ansible_os_family == 'RedHat'
-            - ansible_distribution_major_version == '8'
+            - ansible_facts['os_family'] == 'RedHat'
+            - ansible_facts['distribution_major_version'] is version('8', '==')
           package:
             name: openssl-perl
             state: present
@@ -265,6 +268,6 @@ outputs:
             creates: /etc/ipa/default.conf
           when: ipa_otp != ''
         - name: Request kerberos keytab
-          shell: "/usr/bin/kinit -kt /etc/krb5.keytab && ipa-getkeytab -s $(grep xmlrpc_uri /etc/ipa/default.conf  | cut -d/ -f3) -p nova/{{ ansible_nodename }} -k /etc/novajoin/krb5.keytab"
+          shell: "/usr/bin/kinit -kt /etc/krb5.keytab && ipa-getkeytab -s $(grep xmlrpc_uri /etc/ipa/default.conf  | cut -d/ -f3) -p nova/{{ ansible_facts['nodename'] }} -k /etc/novajoin/krb5.keytab"
           args:
             creates: /etc/novajoin/krb5.keytab

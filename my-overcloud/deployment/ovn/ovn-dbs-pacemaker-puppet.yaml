@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized OVN DBs service managed by pacemaker
@@ -36,11 +36,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -96,6 +93,24 @@ parameters:
       in backup mode and connects to the active ovsdb-server for replication
     type: number
     default: 60000
+  CertificateKeySize:
+    type: string
+    default: '2048'
+    description: Specifies the private key size used when creating the
+                 certificate.
+  OvnDBSCertificateKeySize:
+    type: string
+    default: ''
+    description: Override the private key size used when creating the
+                 certificate for this service
+  OVNDBSPacemakerMonitorIntervalSlave:
+    description: monitor interval for ovn dbs resource in seconds
+    type: number
+    default: 30
+  OVNDBSPacemakerMonitorIntervalMaster:
+    description: monitor interval for ovn dbs resource in seconds
+    type: number
+    default: 10
 
 conditions:
   puppet_debug_enabled: {get_param: ConfigDebug}
@@ -104,6 +119,7 @@ conditions:
   common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
   common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
   use_external_load_balancer: {equals: [{get_param: EnableLoadBalancer}, false]}
+  key_size_override_unset: {equals: [{get_param: OvnDBSCertificateKeySize}, '']}
 
 resources:
 
@@ -116,7 +132,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
       OVNNorthboundServerPort: {get_param: OVNNorthboundServerPort}
@@ -134,6 +149,13 @@ outputs:
             # Control port for pcmk remote bundle
             - 3125
             - {get_param: OVNNorthboundServerPort}
+            - {get_param: OVNSouthboundServerPort}
+      firewall_frontend_rules:
+        '100 ovn_nbdb_haproxy_frontend':
+          dport:
+            - {get_param: OVNNorthboundServerPort}
+        '100 ovn_sbdb_haproxy_frontend_ssl':
+          dport:
             - {get_param: OVNSouthboundServerPort}
       config_settings:
         map_merge:
@@ -157,6 +179,8 @@ outputs:
           - tripleo::profile::pacemaker::ovn_dbs_bundle::dbs_timeout: {get_param: OVNDBSPacemakerTimeout}
           - tripleo::profile::pacemaker::ovn_dbs_bundle::replication_probe_interval: {get_param: OVNDBSReplicationInterval}
           - tripleo::profile::pacemaker::ovn_dbs_bundle::force_ocf: true
+          - tripleo::profile::pacemaker::ovn_dbs_bundle::monitor_interval_slave: {get_param: OVNDBSPacemakerMonitorIntervalSlave}
+          - tripleo::profile::pacemaker::ovn_dbs_bundle::monitor_interval_master: {get_param: OVNDBSPacemakerMonitorIntervalMaster}
           - tripleo::haproxy::ovn_dbs_manage_lb:
               if:
                 - use_external_load_balancer
@@ -169,34 +193,13 @@ outputs:
                 - 'yes'
           - if:
             - internal_tls_enabled
-            - generate_service_certificates: true
-              tripleo::certmonger::ovn_dbs::postsave_cmd:
-                /usr/bin/certmonger-ha-resource-refresh.sh ovn_dbs ovndb_servers ovn-dbs-bundle Slave Master
+            -
               tripleo::profile::pacemaker::ovn_dbs_bundle::ca_file:
                 get_param: InternalTLSCAFile
               tripleo::profile::base::neutron::agents::ovn::protocol: 'ssl'
               tripleo::profile::pacemaker::ovn_dbs_bundle::enable_internal_tls: true
-              ovn_dbs_certificate_specs:
-                service_certificate: '/etc/pki/tls/certs/ovn_dbs.crt'
-                service_key: '/etc/pki/tls/private/ovn_dbs.key'
-                hostname:
-                  str_replace:
-                    template: "%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
-                principal:
-                  str_replace:
-                    template: "ovn_dbs/%{hiera('fqdn_NETWORK')}"
-                    params:
-                      NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
             - {}
       service_config_settings: {}
-      # BEGIN DOCKER SETTINGS
-      puppet_config:
-        config_volume: 'ovn_dbs'
-        puppet_tags: 'exec'
-        step_config: ''
-        config_image: &ovn_dbs_config_image {get_param: ContainerOvnDbsConfigImage}
       kolla_config:
         /var/lib/kolla/config_files/ovn_dbs.json:
           command: /usr/sbin/pacemaker_remoted
@@ -221,43 +224,6 @@ outputs:
               network: {get_param: [ServiceNetMap, OvnDbsNetwork]}
               type: node
           - null
-      docker_config:
-        step_3:
-          ovn_dbs_init_bundle:
-            start_order: 0
-            detach: false
-            net: host
-            ipc: host
-            user: root
-            config_volume: 'ovn_dbs_init_bundle'
-            command: # '/container_puppet_apply.sh "STEP" "TAGS" "CONFIG" "DEBUG"'
-              list_concat:
-                - - '/container_puppet_apply.sh'
-                  - '3'
-                  - 'ovn_dbs_remove_old_cruft'
-                  - 'include tripleo::profile::pacemaker::ovn_dbs_bundle'
-                - if:
-                  - puppet_debug_enabled
-                  - - '--debug'
-                  - - ''
-            image: *ovn_dbs_config_image
-            volumes:
-              list_concat:
-                - {get_attr: [ContainersCommon, container_puppet_apply_volumes]}
-                - if:
-                  - docker_enabled
-                  - - /etc/corosync/corosync.conf:/etc/corosync/corosync.conf:ro
-                  - null
-                - if:
-                  - internal_tls_enabled
-                  -
-                    - /etc/pki/tls/certs/ovn_dbs.crt:/etc/pki/tls/certs/ovn_dbs.crt:ro
-                    - /etc/pki/tls/private/ovn_dbs.key:/etc/pki/tls/private/ovn_dbs.key:ro
-                  - null
-            environment:
-              # NOTE: this should force this container to re-run on each
-              # update (scale-out, etc.)
-              TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -268,6 +234,7 @@ outputs:
           with_items:
             - { 'path': /var/log/containers/openvswitch, 'setype': container_file_t, 'mode': '0750' }
             - { 'path': /var/lib/openvswitch/ovn, 'setype': container_file_t }
+      external_deploy_tasks: {get_attr: [OVNDbsBase, role_data, external_deploy_tasks]}
       deploy_steps_tasks:
         - name: OVN DBS tag container image for pacemaker
           when: step|int == 1
@@ -284,15 +251,57 @@ outputs:
                 name: tripleo_ha_wrapper
               vars:
                 tripleo_ha_wrapper_service_name: ovn_dbs
-                tripleo_ha_wrapper_resource_name: ovndbs_servers
+                tripleo_ha_wrapper_resource_name: ovndb_servers
                 tripleo_ha_wrapper_bundle_name: ovn-dbs-bundle
                 tripleo_ha_wrapper_resource_state: Slave Master
                 tripleo_ha_wrapper_puppet_config_volume: ovn_dbs
                 tripleo_ha_wrapper_puppet_execute: 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::ovn_dbs_bundle'
                 tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
                 tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
-
+        - name: Certificate generation
+          when:
+            - step|int == 1
+            - enable_internal_tls
+          block:
+            - include_role:
+                name: linux-system-roles.certificate
+              vars:
+                certificate_requests:
+                  - name: ovn_dbs
+                    dns:
+                      str_replace:
+                        template: "{{fqdn_$NETWORK}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                    principal:
+                      str_replace:
+                        template: "ovn_dbs/{{fqdn_$NETWORK}}@{{idm_realm}}"
+                        params:
+                          $NETWORK: {get_param: [ServiceNetMap, OvnDbsNetwork]}
+                    key_size:
+                      if:
+                        - key_size_override_unset
+                        - {get_param: CertificateKeySize}
+                        - {get_param: OvnDBSCertificateKeySize}
+                    ca: ipa
       update_tasks:
+        # When a schema change happens, the newer slaves don't connect
+        # back to the older master and end up timing out.  So we clean
+        # up the error here until we get a fix for
+        # https://bugzilla.redhat.com/show_bug.cgi?id=1759974
+        - name: Clear ovndb cluster pacemaker error
+          shell: "pcs resource cleanup ovn-dbs-bundle"
+          when:
+            - step|int == 0
+        # Then we ban the resource for this node.  It has no effect on
+        # the first two controllers, but when we reach the last one,
+        # it avoids a cut in the control plane as master get chosen in
+        # one of the updated Stopped ovn.  They are in error, that why
+        # we need the cleanup just before.
+        - name: Ban ovndb resource on the current node.
+          shell: "pcs resource ban ovn-dbs-bundle $(hostname | cut -d. -f1)"
+          when:
+            - step|int == 0
         - name: Tear-down non-HA ovn-dbs containers
           when:
             - step|int == 1
@@ -306,23 +315,6 @@ outputs:
                   - ovn_north_db_server
                   - ovn_south_db_server
                   - ovn_northd
-        # When a schema change happens, the newer slaves don't connect
-        # back to the older master and end up timing out.  So we clean
-        # up the error here until we get a fix for
-        # https://bugzilla.redhat.com/show_bug.cgi?id=1759974
-        - name: Clear ovndb cluster pacemaker error
-          shell: "pcs resource cleanup ovn-dbs-bundle"
-          when:
-            - step|int == 1
-        # Then we ban the resource for this node.  It has no effect on
-        # the first two controllers, but when we reach the last one,
-        # it avoids a cut in the control plane as master get chosen in
-        # one of the updated Stopped ovn.  They are in error, that why
-        # we need the cleanup just before.
-        - name: Ban ovndb resource on the current node.
-          shell: "pcs resource ban ovn-dbs-bundle $(hostname | cut -d. -f1)"
-          when:
-            - step|int == 1
         - name: ovn-dbs fetch and retag container image for pacemaker
           when:
             - step|int == 3
@@ -368,7 +360,7 @@ outputs:
         - name: Update ovn-dbs-bundle resource to use pcmklatest tag image if not used
           when:
             - step|int == 5
-            - ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower
+            - ovn_dbs_short_bootstrap_node_name|lower == ansible_facts['hostname']|lower
           block:
             - name: Get the present image used by ovn-dbs-bundle
               shell: "pcs resource config ovn-dbs-bundle | grep -Eo 'image=[^ ]+' | awk -F= '{print $2;}'"
@@ -432,7 +424,7 @@ outputs:
         - name: Update ovn_dbs pcs resource bundle for new container image
           when:
             - step|int == 1
-            - ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower
+            - ovn_dbs_short_bootstrap_node_name|lower == ansible_facts['hostname']|lower
             - ovn_dbs_pcs_res|bool
             - ovn_dbs_image_current != ovn_dbs_image_latest
           block:
@@ -514,7 +506,7 @@ outputs:
         - name: Restart ovn-dbs service (pacemaker)
           when:
             - step|int == 1
-            - ovn_dbs_short_bootstrap_node_name|lower == ansible_hostname|lower
+            - ovn_dbs_short_bootstrap_node_name|lower == ansible_facts['hostname']|lower
           pacemaker_resource:
             resource: ovn-dbs-bundle
             state: restart

@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Redis services
@@ -36,11 +36,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -85,17 +82,12 @@ parameter_groups:
   - RedisIPv6
 
 conditions:
-  internal_tls_enabled: {equals: [{get_param: EnableInternalTLS}, true]}
-  docker_enabled: {equals: [{get_param: ContainerCli}, 'docker']}
-  common_tag_enabled: {equals: [{get_param: ClusterCommonTag}, true]}
-  common_tag_full: {equals: [{get_param: ClusterFullTag}, true]}
   is_ipv6:
     equals:
       - {get_param: [ServiceData, net_ip_version_map, {get_param: [ServiceNetMap, RedisNetwork]}]}
       - 6
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -105,7 +97,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -128,12 +119,12 @@ outputs:
             redis::managed_by_cluster_manager: true
             tripleo::profile::pacemaker::database::redis_bundle::redis_docker_image: &redis_image_pcmklatest
               if:
-                - common_tag_full
+                - {get_param: ClusterFullTag}
                 - "cluster.common.tag/redis:pcmklatest"
                 - yaql:
                     data:
                       if:
-                        - common_tag_enabled
+                        - {get_param: ClusterCommonTag}
                         - yaql:
                             data: {get_param: ContainerRedisImage}
                             expression: concat("cluster.common.tag/", $.data.rightSplit(separator => "/", maxSplits => 1)[1])
@@ -170,7 +161,7 @@ outputs:
                   $NETWORK: {get_param: [ServiceNetMap, RedisNetwork]}
             tripleo::profile::pacemaker::database::redis::tls_proxy_port: 6379
           - if:
-            - internal_tls_enabled
+            - {get_param: EnableInternalTLS}
             - redis::extra_config_file: "/etc/redis-tls.conf"
               tripleo::profile::pacemaker::database::redis_bundle::extra_config_file: "/etc/redis-tls.conf"
               tripleo::profile::pacemaker::database::redis_bundle::tls_tunnel_base_port: 6660
@@ -179,7 +170,6 @@ outputs:
                 - is_ipv6
                 - '::1'
                 - '127.0.0.1'
-            - {}
       service_config_settings: {get_attr: [RedisBase, role_data, service_config_settings]}
       # BEGIN DOCKER SETTINGS
       puppet_config:
@@ -189,6 +179,7 @@ outputs:
         # https://github.com/arioch/puppet-redis/commit/1c004143223e660cbd433422ff8194508aab9763
         puppet_tags: 'exec'
         step_config: |
+          Exec <| title == 'systemd-reload-redis' |> { unless => 'true' }
           include tripleo::profile::pacemaker::database::redis_bundle
         config_image: &redis_config_image {get_param: ContainerRedisConfigImage}
       kolla_config:
@@ -243,8 +234,30 @@ outputs:
               perm: '0600'
               optional: true
       container_config_scripts: {get_attr: [ContainersCommon, container_config_scripts]}
+      docker_config:
+        step_1:
+          if:
+            - {get_param: EnableInternalTLS}
+            - redis_tls_proxy:
+                start_order: 0
+                image: {get_param: ContainerRedisImage}
+                net: host
+                user: root
+                restart: always
+                volumes:
+                  list_concat:
+                    - {get_attr: [ContainersCommon, volumes]}
+                    -
+                      - /var/lib/kolla/config_files/redis_tls_proxy.json:/var/lib/kolla/config_files/config.json:ro
+                      - /var/lib/config-data/puppet-generated/redis:/var/lib/kolla/config_files/src:ro
+                      - /etc/pki/tls/certs/redis.crt:/var/lib/kolla/config_files/src-tls/etc/pki/tls/certs/redis.crt:ro
+                      - /etc/pki/tls/private/redis.key:/var/lib/kolla/config_files/src-tls/etc/pki/tls/private/redis.key:ro
+                      - /var/lib/container-config-scripts/wait-port-and-run.sh:/wait-port-and-run.sh:ro
+                environment:
+                  KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       metadata_settings:
         get_attr: [RedisBase, role_data, metadata_settings]
+      external_deploy_tasks: {get_attr: [RedisBase, role_data, external_deploy_tasks]}
       host_prep_tasks:
         - name: create persistent directories
           file:
@@ -262,28 +275,30 @@ outputs:
             content: |
               d /run/redis 0755 root root - -
       deploy_steps_tasks:
-        - name: Redis tag container image for pacemaker
-          when: step|int == 1
-          import_role:
-            name: tripleo_container_tag
-          vars:
-            container_image: {get_param: ContainerRedisImage}
-            container_image_latest: *redis_image_pcmklatest
-        - name: Redis HA Wrappers Step
-          when: step|int == 2
-          block: &redis_puppet_bundle
-            - name: Redis puppet bundle
+        list_concat:
+          - get_attr: [RedisBase, role_data, deploy_steps_tasks]
+          - - name: Redis tag container image for pacemaker
+              when: step|int == 1
               import_role:
-                name: tripleo_ha_wrapper
+                name: tripleo_container_tag
               vars:
-                tripleo_ha_wrapper_service_name: redis
-                tripleo_ha_wrapper_resource_name: redis
-                tripleo_ha_wrapper_bundle_name: redis-bundle
-                tripleo_ha_wrapper_resource_state: Slave Master
-                tripleo_ha_wrapper_puppet_config_volume: redis
-                tripleo_ha_wrapper_puppet_execute: 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::database::redis_bundle'
-                tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
-                tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
+                container_image: {get_param: ContainerRedisImage}
+                container_image_latest: *redis_image_pcmklatest
+            - name: Redis HA Wrappers Step
+              when: step|int == 2
+              block: &redis_puppet_bundle
+                - name: Redis puppet bundle
+                  import_role:
+                    name: tripleo_ha_wrapper
+                  vars:
+                    tripleo_ha_wrapper_service_name: redis
+                    tripleo_ha_wrapper_resource_name: redis
+                    tripleo_ha_wrapper_bundle_name: redis-bundle
+                    tripleo_ha_wrapper_resource_state: Slave Master
+                    tripleo_ha_wrapper_puppet_config_volume: redis
+                    tripleo_ha_wrapper_puppet_execute: 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::database::redis_bundle'
+                    tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
+                    tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
       update_tasks:
         - name: redis_pacemaker_puppet_tmpfile_cleanup
           when: step|int == 1
@@ -382,7 +397,7 @@ outputs:
             - name: Set upgrade redis facts
               set_fact:
                 redis_pcs_res: "{{redis_pcs_res_result.rc == 0}}"
-                is_redis_bootstrap_node: "{{redis_short_bootstrap_node_name|lower == ansible_hostname|lower}}"
+                is_redis_bootstrap_node: "{{redis_short_bootstrap_node_name|lower == ansible_facts['hostname']|lower}}"
         - name: Update redis-bundle pcs resource bundle for new container image
           when:
             - step|int == 1

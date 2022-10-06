@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack containerized Ironic Inspector service (EXPERIMENTAL)
@@ -18,15 +18,12 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   ServiceData:
     default: {}
     description: Dictionary packing service data
-    type: json
-  DefaultPasswords:
-    default: {}
     type: json
   RoleName:
     default: ''
@@ -150,8 +147,16 @@ parameters:
     default: {}
   IronicInspectorUseSwift:
     default: true
-    description: Whether to use Swift for storing introspection data.
+    description: |
+      DEPRECATED: Use IronicInspectorStorageBackend instead.
+      Whether to use Swift for storing introspection data.
     type: boolean
+  IronicInspectorStorageBackend:
+    default: 'none'
+    description: Storage backend for storing introspection data.
+    type: string
+    constraints:
+      - allowed_values: ['none', 'swift', 'database']
   IronicIPXEPort:
     default: 8088
     description: Port to use for serving images when iPXE is used.
@@ -176,17 +181,28 @@ parameters:
                '2001:db8::/64': 'physnet_b'
     type: json
 
+parameter_groups:
+- label: deprecated
+  description: |
+   The following parameters are deprecated and will be removed. They should not
+   be relied on for new deployments. If you have concerns regarding deprecated
+   parameters, please contact the TripleO development team on IRC or the
+   OpenStack mailing list.
+  parameters:
+  - IronicInspectorIpRange
+  - IronicInspectorUseSwift
+
 conditions:
-  enable_ipxe: {equals : [{get_param: IronicInspectorIPXEEnabled}, true]}
-  use_swift: {equals : [{get_param: IronicInspectorUseSwift}, true]}
-  enable_node_discovery: {equals : [{get_param: IronicInspectorEnableNodeDiscovery}, true]}
-  ironic_inspection_subnets_not_set: {equals : [{get_param: IronicInspectorSubnets}, {}]}
+  use_swift:
+    or:
+      - {get_param: IronicInspectorUseSwift}
+      - equals: [{get_param: IronicInspectorStorageBackend}, 'swift']
+  ironic_inspection_subnets_set:
+    not: {equals : [{get_param: IronicInspectorSubnets}, {}]}
   enable_architecture_ppc64le: {contains: ['ppc64le', {get_param: AdditionalArchitectures}]}
   ipa_images: {not: {equals: [{get_param: IPAImageURLs}, []]}}
-  enable_sqlalchemy_collectd: {equals : [{get_param: EnableSQLAlchemyCollectd}, true]}
 
 resources:
-
   ContainersCommon:
     type: ../containers-common.yaml
 
@@ -229,6 +245,14 @@ outputs:
           proto: 'udp'
           chain: 'OUTPUT'
           dport: 547
+      firewall_frontend_rules:
+        '100 ironic-inspector_haproxy_frontend':
+          dport:
+            - 5050
+      firewall_ssl_frontend_rules:
+        '100 ironic-inspector_haproxy_frontend_ssl':
+          dport:
+            - 13050
       keystone_resources:
         ironic-inspector:
           endpoints:
@@ -257,16 +281,16 @@ outputs:
                    $NETWORK: {get_param: [ServiceNetMap, IronicInspectorNetwork]}
             tripleo::profile::base::ironic_inspector::inspection_subnets:
               if:
-              - ironic_inspection_subnets_not_set
-              - [{ip_range: {get_param: IronicInspectorIpRange}}]
+              - ironic_inspection_subnets_set
               - get_param: IronicInspectorSubnets
+              - [{ip_range: {get_param: IronicInspectorIpRange}}]
             ironic::inspector::dnsmasq_interface: {get_param: IronicInspectorInterface}
             ironic::inspector::dnsmasq_dhcp_hostsdir: /var/lib/ironic-inspector/dhcp-hostsdir
             ironic::inspector::pxe_filter::dnsmasq::purge_dhcp_hostsdir: false
             ironic::inspector::pxe_filter::driver: dnsmasq
             ironic::inspector::logging::debug: {get_param: Debug}
             ironic::inspector::always_store_ramdisk_logs: {get_param: Debug}
-            ironic::inspector::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystoneInternal, uri] }
+            ironic::inspector::authtoken::www_authenticate_uri: {get_param: [EndpointMap, KeystonePublic, uri, uri_no_suffix] }
             ironic::inspector::authtoken::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
             ironic::inspector::authtoken::username: 'ironic'
             ironic::inspector::authtoken::password: {get_param: IronicPassword}
@@ -304,57 +328,47 @@ outputs:
                 path: /ironic-inspector
                 query:
                   if:
-                    - enable_sqlalchemy_collectd
-                    -
-                        read_default_file: /etc/my.cnf.d/tripleo.cnf
-                        read_default_group: tripleo
-                        plugin: collectd
-                        collectd_program_name: ironic_inspector
-                        collectd_host: localhost
-                    -
-                        read_default_file: /etc/my.cnf.d/tripleo.cnf
-                        read_default_group: tripleo
+                    - {get_param: EnableSQLAlchemyCollectd}
+                    - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
+                      plugin: collectd
+                      collectd_program_name: ironic_inspector
+                      collectd_host: localhost
+                    - read_default_file: /etc/my.cnf.d/tripleo.cnf
+                      read_default_group: tripleo
 
-          -
-            if:
-            - enable_architecture_ppc64le
-            - ironic::inspector::enable_ppc64le: true
-            - {}
-          -
-            if:
-            - enable_ipxe
-            - ironic::inspector::pxe_transfer_protocol: 'http'
-            - {}
-          -
-            if:
-            - use_swift
-            - ironic::inspector::store_data: 'swift'
-              ironic::inspector::swift::username: 'ironic'
-              ironic::inspector::swift::password: {get_param: IronicPassword}
-              ironic::inspector::swift::project_name: 'service'
-              ironic::inspector::swift::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
-              ironic::inspector::swift::user_domain_name: 'Default'
-              ironic::inspector::swift::project_domain_name: 'Default'
-              ironic::inspector::swift::region_name: {get_param: KeystoneRegion}
-            - {}
-          -
-            if:
-            - enable_node_discovery
-            - ironic::inspector::node_not_found_hook: 'enroll'
-              ironic::inspector::discovery_default_driver: {get_param: IronicInspectorDiscoveryDefaultDriver}
-            - {}
-          # Match what we do for Ironic containers
+            ironic::inspector::enable_ppc64le:
+              if:
+                - enable_architecture_ppc64le
+                - true
+            ironic::inspector::pxe_transfer_protocol:
+              if:
+                - {get_param: IronicInspectorIPXEEnabled}
+                - 'http'
+          - if:
+              - use_swift
+              - ironic::inspector::store_data: 'swift'
+                ironic::inspector::swift::username: 'ironic'
+                ironic::inspector::swift::password: {get_param: IronicPassword}
+                ironic::inspector::swift::project_name: 'service'
+                ironic::inspector::swift::auth_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
+                ironic::inspector::swift::user_domain_name: 'Default'
+                ironic::inspector::swift::project_domain_name: 'Default'
+                ironic::inspector::swift::region_name: {get_param: KeystoneRegion}
+              - ironic::inspector::store_data: {get_param: IronicInspectorStorageBackend}
+          - if:
+              - {get_param: IronicInspectorEnableNodeDiscovery}
+              - ironic::inspector::node_not_found_hook: 'enroll'
+                ironic::inspector::discovery_default_driver: {get_param: IronicInspectorDiscoveryDefaultDriver}
+                # Match what we do for Ironic containers
           - ironic::inspector::tftp_root: /var/lib/ironic/tftpboot
-          - ironic::inspector::http_root: /var/lib/ironic/httpboot
+            ironic::inspector::http_root: /var/lib/ironic/httpboot
       service_config_settings:
         mysql:
           ironic::inspector::db::mysql::password: {get_param: IronicPassword}
           ironic::inspector::db::mysql::user: ironic-inspector
-          ironic::inspector::db::mysql::host: {get_param: [EndpointMap, MysqlInternal, host_nobrackets]}
+          ironic::inspector::db::mysql::host: '%'
           ironic::inspector::db::mysql::dbname: ironic-inspector
-          ironic::inspector::db::mysql::allowed_hosts:
-            - '%'
-            - "%{hiera('mysql_bind_host')}"
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: ironic_inspector
@@ -371,7 +385,7 @@ outputs:
       kolla_config:
         /var/lib/kolla/config_files/ironic_inspector.json:
           command: /usr/bin/ironic-inspector --config-file /etc/ironic-inspector/inspector-dist.conf --config-file /etc/ironic-inspector/inspector.conf
-          config_files:
+          config_files: &ironic_inspector_config_files
             - source: "/var/lib/kolla/config_files/src/*"
               dest: "/"
               merge: true
@@ -397,6 +411,13 @@ outputs:
               owner: ironic-inspector:ironic-inspector
               recurse: true
           command: /sbin/dnsmasq --conf-file=/etc/ironic-inspector/dnsmasq.conf -k --log-facility=/var/log/ironic-inspector/dnsmasq.log
+        /var/lib/kolla/config_files/ironic_inspector_db_sync.json:
+          command: "/usr/bin/bootstrap_host_exec ironic_inspector su ironic-inspector -s /bin/bash -c 'ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf upgrade'"
+          config_files: *ironic_inspector_config_files
+          permissions:
+            - path: /var/log/ironic-inspector
+              owner: ironic-inspector:ironic-inspector
+              recurse: true
       docker_config:
         step_3:
           ironic_inspector_init_log:
@@ -428,13 +449,12 @@ outputs:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
                 -
-                  - /var/lib/kolla/config_files/ironic_inspector.json:/var/lib/kolla/config_files/config.json:ro
-                  - /var/lib/config-data/ironic_inspector/etc/ironic-inspector:/etc/ironic-inspector:ro
+                  - /var/lib/kolla/config_files/ironic_inspector_db_sync.json:/var/lib/kolla/config_files/config.json:ro
+                  - /var/lib/config-data/puppet-generated/ironic_inspector:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers/ironic-inspector:/var/log/ironic-inspector:z
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
               TRIPLEO_DEPLOY_IDENTIFIER: {get_param: DeployIdentifier}
-            command: "/usr/bin/bootstrap_host_exec ironic_inspector su ironic-inspector -s /bin/bash -c 'ironic-inspector-dbsync --config-file /etc/ironic-inspector/inspector.conf upgrade'"
           ironic_inspector_get_ipa:
             start_order: 2
             image: *ironic_inspector_image
@@ -500,6 +520,11 @@ outputs:
             environment:
               KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
       host_prep_tasks:
+        - name: create fcontext entry for ironic-inspector data
+          community.general.sefcontext:
+            target: "/var/lib/ironic-inspector/dhcp-hostsdir(/.*)?"
+            setype: container_file_t
+            state: present
         - name: create persistent directories
           file:
             path: "{{ item.path }}"
@@ -528,3 +553,19 @@ outputs:
             - step|int == 0
           tags: common
           block: *ironic_config_data_cleanup
+      external_upgrade_tasks:
+        - when:
+            - step|int == 1
+          tags:
+            - never
+            - system_upgrade_transfer_data
+            - system_upgrade_stop_services
+          block:
+            - name: Stop ironic inspector container
+              import_role:
+                name: tripleo_container_stop
+              vars:
+                tripleo_containers_to_stop:
+                  - ironic_inspector
+                  - ironic_inspector_dnsmasq
+                tripleo_delegate_to: "{{ groups['ironic_inspector'] | default([]) }}"

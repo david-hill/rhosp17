@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Openstack Cinder Dell EMC PowerFlex backend
@@ -100,11 +100,8 @@ parameters:
     type: json
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-  DefaultPasswords:
-    type: json
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
   RoleName:
     type: string
     default: ''
@@ -142,8 +139,6 @@ outputs:
             cinder::backend::dellemc_powerflex::san_thin_provision: {get_param: CinderPowerFlexSanThinProvision}
             cinder::backend::dellemc_powerflex::driver_ssl_cert_verify: {get_param: CinderPowerFlexDriverSSLCertVerify}
             cinder::backend::dellemc_powerflex::driver_ssl_cert_path: {get_param: CinderPowerFlexDriverSSLCertPath}
-          -
-            if:
-            - {equals : [{get_param: CinderPowerFlexAvailabilityZone}, '']}
-            - {}
+          - if:
+            - not: {equals : [{get_param: CinderPowerFlexAvailabilityZone}, '']}
             - cinder::backend::dellemc_powerflex::backend_availability_zone: {get_param: CinderPowerFlexAvailabilityZone}

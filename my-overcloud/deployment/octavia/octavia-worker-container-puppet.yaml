@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   OpenStack Octavia worker service configured with Puppet
@@ -27,11 +27,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -63,7 +60,6 @@ resources:
       EndpointMap: {get_param: EndpointMap}
       ServiceData: {get_param: ServiceData}
       ServiceNetMap: {get_param: ServiceNetMap}
-      DefaultPasswords: {get_param: DefaultPasswords}
       RoleName: {get_param: RoleName}
       RoleParameters: {get_param: RoleParameters}
 
@@ -114,12 +110,12 @@ outputs:
               # missing here because we use the same config_volume for all
               # octavia services, hence the same container image to generate
               # configuration.
-              - /var/lib/config-data/puppet-generated/octavia/etc/octavia:/etc/octavia/:z
+              - /var/lib/config-data/puppet-generated/octavia/etc/octavia:/etc/octavia:z
             command: ['/bin/bash', '-c', 'mkdir -p /etc/octavia/conf.d/octavia-worker; chown -R octavia:octavia /etc/octavia/conf.d/octavia-worker']
         step_5:
           octavia_worker:
             start_order: 2
-            stop_grace_period: 300
+            stop_grace_period: 630
             image: *octavia_worker_image
             net: host
             privileged: false
@@ -151,7 +147,7 @@ outputs:
                   - python2-openstackclient
                   - openssl
                 state: present
-              when: ansible_distribution_major_version is version(8, '<')
+              when: ansible_facts['distribution_major_version'] is version(8, '<')
 
             - name: Ensure packages required for configuring octavia are present for CentOS/RHEL 8
               package:
@@ -160,11 +156,30 @@ outputs:
                   - python3-openstackclient
                   - openssl
                 state: present
-              when: ansible_distribution_major_version is version(8, '>=')
+              when: ansible_facts['distribution_major_version'] is version(8, '>=')
           when: {get_param: EnablePackageInstall}
         - name: enable virt_sandbox_use_netlink for healthcheck
           seboolean:
             name: virt_sandbox_use_netlink
-            persistent: yes
-            state: yes
-      upgrade_tasks: []
+            persistent: true
+            state: true
+          when:
+            - ansible_facts.selinux is defined
+            - ansible_facts.selinux.status == "enabled"
+      update_tasks: {get_attr: [OctaviaBase, role_data, update_tasks]}
+      upgrade_tasks: {get_attr: [OctaviaBase, role_data, upgrade_tasks]}
+      external_upgrade_tasks:
+        - when:
+            - step|int == 1
+          tags:
+            - never
+            - system_upgrade_transfer_data
+            - system_upgrade_stop_services
+          block:
+            - name: Stop octavia api container
+              import_role:
+                name: tripleo_container_stop
+              vars:
+                tripleo_containers_to_stop:
+                  - octavia_worker
+                tripleo_delegate_to: "{{ groups['octavia_worker'] | default([]) }}"

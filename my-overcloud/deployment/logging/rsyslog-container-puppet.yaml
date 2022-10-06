@@ -1,4 +1,4 @@
-heat_template_version: rocky
+heat_template_version: wallaby
 
 description: >
   Containerized rsyslogd service for purposes of centralized log collection
@@ -23,11 +23,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
-    type: json
-  DefaultPasswords:
-    default: {}
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -37,6 +34,10 @@ parameters:
     default: {}
     description: Parameters specific to the role
     type: json
+  RsyslogReopenOnTruncate:
+    default: false
+    description: Rsyslog imfile reopenOnTruncate parameter
+    type: boolean
   RsyslogElasticsearchSetting:
     default: {}
     description: Configuration for rsyslog-elasticsearch plugin
@@ -61,6 +62,19 @@ parameters:
     type: string
     default: 'regionOne'
     description: Keystone region for endpoint
+  RsyslogAmqp1Setting:
+    default: {}
+    description: Configuration for rsyslog-omamqp1 plugin
+    type: json
+  RsyslogAmqp1Local:
+    default: true
+    description: Set to false to disable prefilling host connection value to local QDR in RsyslogAmqp1Setting.
+    type: boolean
+  MetricsQdrPort:
+    default: 5666
+    description: Service name or port number on which the qdrouterd will accept
+                 connections.
+    type: number
 
 resources:
   ContainersCommon:
@@ -70,9 +84,16 @@ conditions:
   use_tls:
     not:
       and:
+        - equals: [{get_param: RsyslogElasticsearchSetting}, {}]
         - equals: [{get_param: RsyslogElasticsearchTlsCACert}, '']
         - equals: [{get_param: RsyslogElasticsearchTlsClientCert}, '']
         - equals: [{get_param: RsyslogElasticsearchTlsClientKey}, '']
+  use_elasticsearch:
+    not:
+      equals: [{get_param: RsyslogElasticsearchSetting}, {}]
+  use_amqp1:
+    not:
+      equals: [{get_param: RsyslogAmqp1Setting}, {}]
 
 outputs:
   role_data:
@@ -116,6 +137,7 @@ outputs:
             rsyslog::server::modules:
               imfile: {}
               omelasticsearch: {}
+              omamqp1: {}
             # output setting
             rsyslog::server::templates:
               rsyslog-node-index:
@@ -182,20 +204,48 @@ outputs:
                     outname: region
                     value: {get_param: KeystoneRegion}
                     format: jsonf
-
-            tripleo::profile::base::logging::rsyslog::elasticsearch:
-              map_merge:
-                - {get_param: RsyslogElasticsearchSetting}
-                - template: rsyslog-record
-                  searchIndex: rsyslog-node-index
-                  dynSearchIndex: "on"
-                  errorfile: '/var/log/rsyslog/omelasticsearch.log'
+          - if:
+            - use_elasticsearch
+            - tripleo::profile::base::logging::rsyslog::elasticsearch:
+                map_merge:
+                  - {get_param: RsyslogElasticsearchSetting}
+                  - template: rsyslog-record
+                    searchIndex: rsyslog-node-index
+                    dynSearchIndex: "on"
+                    errorfile: '/var/log/rsyslog/omelasticsearch.log'
+            - {}
+          - if:
+            - use_amqp1
+            - tripleo::profile::base::logging::rsyslog::amqp1:
+                map_merge:
+                  - {get_param: RsyslogAmqp1Setting}
+                  - template: rsyslog-record
+                  - if:
+                    - {get_param: RsyslogAmqp1Local}
+                    - host:
+                        str_replace:
+                          template:
+                            "%{hiera('$NETWORK')}:$PORT"
+                          params:
+                            $PORT:
+                              get_param: MetricsQdrPort
+                            $NETWORK:
+                              get_param:
+                                - ServiceNetMap
+                                - str_replace:
+                                    template: "ROLENAMEMetricsQdrNetwork"
+                                    params:
+                                      ROLENAME: {get_param: RoleName}
+            - {}
+          - if:
+            - {get_param: RsyslogReopenOnTruncate}
+            - tripleo::profile::base::logging::rsyslog::reopen_on_truncate: "on"
+            - {}
           - if:
             - use_tls
             - tripleo::profile::base::logging::rsyslog::elasticsearch_tls_ca_cert: {get_param: RsyslogElasticsearchTlsCACert}
               tripleo::profile::base::logging::rsyslog::elasticsearch_tls_client_cert: {get_param: RsyslogElasticsearchTlsClientCert}
               tripleo::profile::base::logging::rsyslog::elasticsearch_tls_client_key: {get_param: RsyslogElasticsearchTlsClientKey}
-            - {}
       # BEGIN DOCKER SETTINGS
       puppet_config:
         config_volume: rsyslog
@@ -225,12 +275,12 @@ outputs:
             privileged: true
             user: root
             restart: always
-            security_opt: 'label=disable'
+            security_opt:
+              - label=disable
             volumes:
               list_concat:
                 - {get_attr: [ContainersCommon, volumes]}
-                -
-                  - /var/lib/kolla/config_files/rsyslog.json:/var/lib/kolla/config_files/config.json:ro
+                - - /var/lib/kolla/config_files/rsyslog.json:/var/lib/kolla/config_files/config.json:ro
                   - /var/lib/config-data/puppet-generated/rsyslog:/var/lib/kolla/config_files/src:ro
                   - /var/log/containers:/var/log/containers:ro
                   - /var/log/containers/rsyslog:/var/log/rsyslog:rw,z
