@@ -56,6 +56,7 @@
     - OS::TripleO::Services::CephMds
     - OS::TripleO::Services::CephMgr
     - OS::TripleO::Services::CephMon
+    - OS::TripleO::Services::CephNfs
     - OS::TripleO::Services::CephRbdMirror
     - OS::TripleO::Services::CephRgw
     - OS::TripleO::Services::CinderApi
@@ -115,6 +116,7 @@
     - OS::TripleO::Services::ManilaBackendCephFs
     - OS::TripleO::Services::ManilaBackendIsilon
     - OS::TripleO::Services::ManilaBackendNetapp
+    - OS::TripleO::Services::ManilaBackendPowerMax
     - OS::TripleO::Services::ManilaBackendUnity
     - OS::TripleO::Services::ManilaBackendVNX
     - OS::TripleO::Services::ManilaBackendVMAX
@@ -159,7 +161,6 @@
     - OS::TripleO::Services::OsloMessagingRpc
     - OS::TripleO::Services::OsloMessagingNotify
     - OS::TripleO::Services::Podman
-    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Redis
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog

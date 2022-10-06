@@ -31,8 +31,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   EndpointMap:
     default: {}
@@ -160,6 +160,7 @@ outputs:
     value:
       service_name: haproxy
       monitoring_subscription: {get_attr: [HAProxyBase, role_data, monitoring_subscription]}
+      ansible_group_vars: {get_attr: [HAProxyBase, role_data, ansible_group_vars]}
       config_settings:
         map_merge:
           - get_attr: [HAProxyBase, role_data, config_settings]
@@ -196,8 +197,6 @@ outputs:
                   - get_param: HAProxyInternalTLSCertsDirectory
             tripleo::profile::pacemaker::haproxy_bundle::internal_certs_directory: {get_param: HAProxyInternalTLSCertsDirectory}
             tripleo::profile::pacemaker::haproxy_bundle::internal_keys_directory: {get_param: HAProxyInternalTLSKeysDirectory}
-            # disable the use CRL file until we can restart the container when the file expires
-            tripleo::haproxy::crl_file: null
             tripleo::profile::pacemaker::haproxy_bundle::haproxy_docker_image: &haproxy_image_pcmklatest
               if:
                 - {get_param: ClusterFullTag}

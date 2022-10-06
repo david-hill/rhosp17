@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   CephDashboardAdminPassword:
     description: Admin password for the dashboard component
@@ -35,14 +35,6 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
-  StackUpdateType:
-    type: string
-    description: >
-      Type of update, to differentiate between UPGRADE and UPDATE cases
-      when StackAction is UPDATE (both are the same stack action).
-    constraints:
-    - allowed_values: ['', 'UPGRADE']
-    default: ''
   NodeDataLookup:
     type: json
     default: {}
@@ -390,8 +382,6 @@ conditions:
     yaql:
       data: {get_param: ContainerCephDaemonImage}
       expression: $.data.split('/')[0].matches('(\.|:)')
-  perform_upgrade:
-    equals: [{get_param: StackUpdateType}, 'UPGRADE']
   ceph_ansible_skip_tags_set:
     not:
       equals:
@@ -741,6 +731,7 @@ outputs:
                 - opendev-validation
                 - opendev-validation-ceph
         - name: Cleanup ceph-ansible package
+          become: true
           when:
             - (step | int) == 3
             - '"cephadm-adopt" in ceph_ansible_playbooks_default[0]'
@@ -802,6 +793,13 @@ outputs:
             - name: set ceph_ansible_playbooks_default
               set_fact:
                 ceph_ansible_playbooks_default: ["/usr/share/ceph-ansible/infrastructure-playbooks/rolling_update.yml"]
+            - name: Add ceph-infra tag to the skip list
+              set_fact:
+                ceph_ansible_skip_tags:
+                  list_join:
+                    - ','
+                    - - get_param: CephAnsibleSkipTags
+                      - 'ceph_infra'
       post_upgrade_tasks:
         - name: Clean puppet-ceph package
           when:

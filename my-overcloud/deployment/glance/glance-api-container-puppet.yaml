@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -444,6 +444,13 @@ outputs:
         '112 glance_api':
           dport:
             - 9292
+      firewall_frontend_rules:
+        '100 glance_api_haproxy_frontend':
+          dport:
+            - 9292
+      firewall_ssl_frontend_rules:
+        '100 glance_api_haproxy_frontend_ssl':
+          dport:
             - 13292
       keystone_resources:
         glance:
@@ -572,6 +579,7 @@ outputs:
             tripleo::profile::base::glance::api::multistore_config: {get_param: GlanceMultistoreConfig}
             tripleo::profile::base::glance::backend::rbd::glance_rbd_ceph_conf_path: {get_param: CephConfigPath}
             glance::notify::rabbitmq::notification_driver: {get_param: NotificationDriver}
+            glance::notify::rabbitmq::rabbit_heartbeat_in_pthread: false
             glance::cron::db_purge::minute: {get_param: GlanceCronDbPurgeMinute}
             glance::cron::db_purge::hour: {get_param: GlanceCronDbPurgeHour}
             glance::cron::db_purge::monthday: {get_param: GlanceCronDbPurgeMonthday}
@@ -852,3 +860,5 @@ outputs:
                   - glance_api
                   - glance_api_cron
                 tripleo_delegate_to: "{{ groups['glance_api'] | default([]) }}"
+      deploy_steps_tasks:
+        get_attr: [TLSProxyBase, role_data, deploy_steps_tasks]

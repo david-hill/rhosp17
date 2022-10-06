@@ -26,8 +26,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -436,7 +436,7 @@ parameters:
   NovaHWMachineType:
     description: >
       To specify a default machine type per host architecture.
-    default: 'x86_64=q35'
+    default: 'x86_64=pc-q35-rhel9.0.0'
     type: string
     tags:
       - role_specific
@@ -648,6 +648,12 @@ parameters:
     default: false
     tags:
       - role_specific
+  NovaDisableComputeServiceCheckForFfu:
+    type: boolean
+    description: >
+      Facilitate a Fast-Forward upgrade where new control services are being started
+      before compute nodes have been able to update their service record.
+    default: false
   NovaStatedirOwnershipSkip:
     type: comma_delimited_list
     description: >
@@ -1179,6 +1185,8 @@ outputs:
               if:
                 - nova_libvirt_max_queues_set
                 - {get_attr: [RoleParametersValue, value, nova_libvirt_max_queues]}
+            # Params to enable service check on FFU
+            nova::workarounds::disable_compute_service_check_for_ffu: {get_param: NovaDisableComputeServiceCheckForFfu}
           - if:
             - glance_enable_rbd_download_set
             - nova::glance::enable_rbd_download: {get_attr: [RoleParametersValue, value, nova_glance_enable_rbd_download]}
@@ -1354,7 +1362,7 @@ outputs:
                 user: nova
                 restart: always
                 depends_on:
-                  - tripleo_nova_libvirt.service
+                  - tripleo_nova_libvirt.target
                 healthcheck: {get_attr: [ContainersCommon, healthcheck_rpc_port]}
                 volumes:
                   list_concat:
@@ -1435,7 +1443,7 @@ outputs:
               state: mounted
               fstype: nfs4
               src: "{{nfs_share}}"
-              opts: "_netdev,bg,{{nfs_options}},vers={{nfs_vers}},nfsvers={{nfs_vers}}"
+              opts: "_netdev,bg,{{nfs_options}},nfsvers={{nfs_vers}}"
             when: nfs_backend_enable|bool
           - name: is Nova Resume Guests State On Host Boot enabled
             set_fact:
@@ -1500,7 +1508,7 @@ outputs:
                     Requires=virt-guest-shutdown.target
                     After=systemd-machined.service
                     After=network-online.target
-                    After=tripleo_nova_libvirt.service
+                    After=tripleo_nova_libvirt.target
                     Before=tripleo_nova_compute.service
                     Documentation=man:libvirtd(8)
                     Documentation=https://libvirt.org

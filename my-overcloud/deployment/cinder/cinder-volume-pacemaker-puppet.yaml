@@ -36,8 +36,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -134,7 +134,7 @@ outputs:
           list_join:
             - "\n"
             - - "include tripleo::profile::base::lvm"
-            - - "include tripleo::profile::pacemaker::cinder::volume"
+            - - "include tripleo::profile::pacemaker::cinder::volume_bundle"
               - get_attr: [MySQLClient, role_data, step_config]
         config_image: {get_param: ContainerCinderConfigImage}
       kolla_config:
@@ -178,6 +178,7 @@ outputs:
                 tripleo_ha_wrapper_puppet_execute: 'include ::tripleo::profile::base::pacemaker; include ::tripleo::profile::pacemaker::cinder::volume_bundle'
                 tripleo_ha_wrapper_puppet_tags: 'pacemaker::resource::bundle,pacemaker::property,pacemaker::resource::ip,pacemaker::resource::ocf,pacemaker::constraint::order,pacemaker::constraint::colocation'
                 tripleo_ha_wrapper_puppet_debug: {get_param: ConfigDebug}
+                tripleo_ha_wrapper_config_suffix: .cinder_volume_previous_run
 
       update_tasks:
         - name: Tear-down non-HA cinder_volume container

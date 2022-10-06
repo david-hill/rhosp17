@@ -13,8 +13,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -47,6 +47,10 @@ parameters:
   IdMNovaKeytab:
     default: 'FILE:/etc/novajoin/krb5.keytab'
     description: keytab for the nova/[host fqdn] user on the FreeIPA server.
+    type: string
+  IdMNovaCredentialCache:
+    default: '/etc/novajoin/krb5.cache'
+    description: credential cache for nova/[host fqdn] user
     type: string
   MakeHomeDir:
     type: boolean
@@ -113,13 +117,13 @@ outputs:
                 tripleo_ipa_ptr_zone_split_ipv6: {get_param: IdMZoneSplitIPv6}
               when: {get_param: IdMModifyDNS}
           environment:
-            if:
-              - idm_server_provided
-              - IPA_HOST: {get_param: [IdMServer, 0]}
-                IPA_USER: "nova/{{ ansible_facts['fqdn'] }}"
-                KRB5_CLIENT_KTNAME: {get_param: IdMNovaKeytab}
+            map_merge:
               - IPA_USER: "nova/{{ ansible_facts['fqdn'] }}"
                 KRB5_CLIENT_KTNAME: {get_param: IdMNovaKeytab}
+                KRB5CCNAME: {get_param: IdMNovaCredentialCache}
+              - if:
+                - idm_server_provided
+                - IPA_HOST: {get_param: [IdMServer, 0]}
         - name: enroll the node as an ipa client
           #NOTE(xek): this is moved to external_deploy_tasks to make sure this happens before certificates are requested from certmonger
           when: step|int == 1

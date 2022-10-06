@@ -22,8 +22,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -72,6 +72,11 @@ outputs:
           dport:
             - 6379
             - 26379
+      firewall_frontend_rules:
+        '100 redis_haproxy_frontend':
+          dport:
+            - 6379
+            - 26379
       config_settings:
         map_merge:
           - {get_attr: [RedisBase, role_data, config_settings]}
@@ -108,7 +113,8 @@ outputs:
         step_config:
           list_join:
             - "\n"
-            - - include tripleo::profile::base::database::redis
+            - - Exec <| title == 'systemd-reload-redis' |> { unless => 'true' }
+              - include tripleo::profile::base::database::redis
               - {get_attr: [RedisBase, role_data, step_config]}
         config_image: {get_param: ContainerRedisConfigImage}
       kolla_config:

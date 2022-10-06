@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   DefaultPasswords:
     default: {}
@@ -30,14 +30,6 @@ parameters:
     description: Mapping of service endpoint -> protocol. Typically set
                  via parameter_defaults in the resource registry.
     type: json
-  StackUpdateType:
-    type: string
-    description: >
-      Type of update, to differentiate between UPGRADE and UPDATE cases
-      when StackAction is UPDATE (both are the same stack action).
-    constraints:
-    - allowed_values: ['', 'UPGRADE']
-    default: ''
   NodeDataLookup:
     type: json
     default: {}
@@ -85,16 +77,24 @@ parameters:
     description: >
       Enable Ceph msgr2 secure mode to enable on-wire encryption between Ceph
       daemons and also between Ceph clients and daemons.
-  CephPoolDefaultPgNum:
-    description: default pg_num to use for the RBD pools
-    type: number
-    default: 16
   CephPools:
     description: >
-      It can be used to override settings for one of the predefined pools, or to create
-      additional ones. Example:
-      [{"name": "volumes", "pg_num": 64, "rule_name": "replicated_rule"},
-       {"name": "vms", "target_size_ratio": "0.4", "rule_name": "replicated_rule"}]
+      Used to override settings (mainly target_size_ratio or pg_num) in pools.
+      Pacific has pg_autoscale_mode enabled by default so set target_size_ratio
+      as a percentage of the expected data consumption. The example below sets
+      cinder volumes 40%, glance images 10%, nova vms 30% (20% of space free).
+      Not set by default but overrides are encouraged to avoid data rebalancing.
+      For example,
+      CephPools:
+        - name: volumes
+          target_size_ratio: 0.4
+          application: rbd
+        - name: images
+          target_size_ratio: 0.1
+          application: rbd
+        - name: vms
+          target_size_ratio: 0.3
+          application: rbd
     default: []
     type: json
   CinderRbdPoolName:
@@ -178,10 +178,6 @@ parameters:
     hidden: true
     constraints:
     - allowed_pattern: "^[a-zA-Z0-9+/]{38}==$"
-  CephPoolDefaultSize:
-    description: default minimum replication for RBD copies
-    type: number
-    default: 3
   ManilaCephFSDataPoolName:
     default: manila_data
     type: string
@@ -279,6 +275,14 @@ parameters:
       don't fail because the package is installed on the system but repos are
       disabled.
     default: true
+  CephPoolDefaultPgNum:
+    description: default pg_num to use for the RBD pools
+    type: number
+    default: 16
+  CephPoolDefaultSize:
+    description: default minimum replication for RBD copies
+    type: number
+    default: 3
   # end DEPRECATED options for compatibility with older versions
   ContainerImageRegistryCredentials:
     type: json
@@ -429,30 +433,42 @@ parameters:
     description: |
       The interval applied to the rbd trash purge scheduler, that can be
       expressed in minutes.
+  CephRbdTrashSchedulerEnable:
+    default: false
+    type: boolean
+    description: Enable Ceph rbd trash scheduler
   CephadmDefaultContainer:
     default: false
     type: boolean
     description: |
       Use the default continer defined in cephadm instead of
       the one defined in container_image_prepare_defaults.yaml.
+  ExternalCeph:
+    default: false
+    type: boolean
+    description: |
+      If the Ceph cluster has been deployed outside of TripleO.
+      DeployedCeph and ExternalCeph are mutually exclusive.
 
 parameter_groups:
 - label: deprecated
   description: Do not use deprecated params, they will be removed.
   parameters:
-  - LocalCephAnsibleFetchDirectoryBackup
-  - SwiftFetchDirGetTempurl
-  - SwiftFetchDirPutTempurl
-  - CephIPv6
-  - CephAnsibleEnvironmentVariables
-  - CephAnsibleExtraConfig
-  - CephAnsiblePlaybook
-  - CephAnsiblePlaybookVerbosity
-  - CephAnsibleRepo
-  - CephAnsibleSkipTags
-  - CephAnsibleSkipClient
-  - CephAnsibleWarning
-  - CephOsdPercentageMin
+    - LocalCephAnsibleFetchDirectoryBackup
+    - SwiftFetchDirGetTempurl
+    - SwiftFetchDirPutTempurl
+    - CephIPv6
+    - CephAnsibleEnvironmentVariables
+    - CephAnsibleExtraConfig
+    - CephAnsiblePlaybook
+    - CephAnsiblePlaybookVerbosity
+    - CephAnsibleRepo
+    - CephAnsibleSkipTags
+    - CephAnsibleSkipClient
+    - CephAnsibleWarning
+    - CephOsdPercentageMin
+    - CephPoolDefaultPgNum
+    - CephPoolDefaultSize
 
 conditions:
   custom_registry_host:
@@ -512,10 +528,7 @@ resources:
     properties:
       type: json
       value:
-        vars:
-          osd_pool_default_size: {get_param: CephPoolDefaultSize}
-          osd_pool_default_pg_num: {get_param: CephPoolDefaultPgNum}
-          osd_pool_default_pgp_num: {get_param: CephPoolDefaultPgNum}
+        vars: {}
 
   CephAdmVars:
     type: OS::Heat::Value
@@ -536,6 +549,7 @@ resources:
           tripleo_cephadm_debug: {get_param: CephAdmDebug}
           tripleo_cephadm_verbose: {get_param: CephAdmVerbose}
           tripleo_cephadm_rbd_trash: {get_param: CephRbdTrashPurgeInterval}
+          tripleo_cephadm_enable_trash_scheduler: {get_param: CephRbdTrashSchedulerEnable}
           tripleo_cephadm_apply_ceph_conf_overrides_on_update: {get_param: ApplyCephConfigOverridesOnUpdate}
           tripleo_cephadm_default_container: {get_param: CephadmDefaultContainer}
           ceph_container_registry_auth:
@@ -619,12 +633,9 @@ outputs:
                         - true
                         - false
                   extra_pools: {get_param: CephPools}
-                  pg_num: {get_param: CephPoolDefaultPgNum}
                 manila_pools:
                   data: {get_param: ManilaCephFSDataPoolName}
                   metadata: {get_param: ManilaCephFSMetadataPoolName}
-                  data_pg_num: {get_param: CephPoolDefaultPgNum}
-                  metadata_pg_num: {get_param: CephPoolDefaultPgNum}
                 ceph_keys:
                   openstack_client:
                     name: {get_param: CephClientUserName}
@@ -657,7 +668,9 @@ outputs:
               include_role:
                 name: tripleo_run_cephadm
                 tasks_from: enable_ceph_admin_user.yml
-              when: (not deployed_ceph and
+              when:
+                - not external_ceph
+                - (not deployed_ceph and
                       (groups['ceph_mon'] | default([]) | length > 0 or
                        groups['ceph_nfs'] | default([]) | length > 0))
                     or
@@ -679,20 +692,28 @@ outputs:
                         groups['ceph_rbdmirror'] | default([]) | length > 0)))
               vars:
                 deployed_ceph: {get_param: DeployedCeph}
+                external_ceph: {get_param: ExternalCeph}
             - name: Deploy or configure the cephadm Ceph cluster
               include_role:
                 name: tripleo_run_cephadm
-              when: groups['ceph_mon'] | default([]) | length > 0 or
-                    groups['ceph_nfs'] | default([]) | length > 0
+              when:
+                - not external_ceph
+                - groups['ceph_mon'] | default([]) | length > 0 or
+                  groups['ceph_nfs'] | default([]) | length > 0
+              vars:
+                external_ceph: {get_param: ExternalCeph}
         - name: ceph_base_external_deploy_task
           when:
             - (step | int) == 3
             - {get_param: DisableCephadm}
+            - not external_ceph
           block:
             - name: Pause cephadm
               include_role:
                 name: tripleo_run_cephadm
                 tasks_from: disable_cephadm.yml
+          vars:
+            external_ceph: {get_param: ExternalCeph}
       post_upgrade_tasks:
         - name: Clean puppet-ceph package
           when:

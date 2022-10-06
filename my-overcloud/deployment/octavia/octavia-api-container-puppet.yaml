@@ -27,8 +27,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -150,6 +150,13 @@ outputs:
         '120 octavia api':
           dport:
             - 9876
+      firewall_frontend_rules:
+        '100 octavia_haproxy_frontend':
+          dport:
+            - 9876
+      firewall_ssl_frontend_rules:
+        '100 octavia_haproxy_frontend_ssl':
+          dport:
             - 13876
       keystone_resources:
         octavia:
@@ -165,6 +172,12 @@ outputs:
               project: {get_param: OctaviaProjectName}
           region: {get_param: KeystoneRegion}
           service: 'load-balancer'
+          roles:
+            - load-balancer_admin
+            - load-balancer_quota_admin
+            - load-balancer_member
+            - load-balancer_global_observer
+            - load-balancer_observer
       monitoring_subscription: {get_param: MonitoringSubscriptionOctaviaApi}
       config_settings:
         map_merge:
@@ -215,7 +228,8 @@ outputs:
                   "%{hiera('$NETWORK')}"
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, OctaviaApiNetwork]}
-          - octavia::api::provider_drivers:
+            tripleo::profile::base::octavia::enable_driver_agent: {get_param: OctaviaEnableDriverAgent}
+            octavia::api::provider_drivers:
               list_join:
                 - ','
                 - list_concat:
@@ -286,17 +300,23 @@ outputs:
         /var/lib/kolla/config_files/octavia_driver_agent.json:
           command: /usr/bin/octavia-driver-agent --config-file /usr/share/octavia/octavia-dist.conf --config-file /etc/octavia/octavia.conf --log-file /var/log/octavia/driver-agent.log --config-dir /etc/octavia/conf.d/common
           config_files:
-            - source: "/var/lib/kolla/config_files/src/*"
-              dest: "/"
-              merge: true
-              preserve_properties: true
+            list_concat:
+              -
+                - source: "/var/lib/kolla/config_files/src/*"
+                  dest: "/"
+                  merge: true
+                  preserve_properties: true
+              - {get_attr: [OctaviaProviderConfig, role_data, kolla_config_files]}
           permissions:
-            - path: /var/log/octavia
-              owner: octavia:octavia
-              recurse: true
-            - path: /run/octavia
-              owner: octavia:octavia
-              recurse: true
+            list_concat:
+              -
+                - path: /var/log/octavia
+                  owner: octavia:octavia
+                  recurse: true
+                - path: /run/octavia
+                  owner: octavia:octavia
+                  recurse: true
+              - {get_attr: [OctaviaProviderConfig, role_data, kolla_permissions]}
         /var/lib/kolla/config_files/octavia_api_db_sync.json:
           command: "/usr/bin/bootstrap_host_exec octavia_api su octavia -s /bin/bash -c '/usr/bin/octavia-db-manage upgrade head'"
           config_files: *octavia_api_config_files
@@ -389,6 +409,7 @@ outputs:
                           - /var/lib/config-data/puppet-generated/octavia:/var/lib/kolla/config_files/src:ro
                           - /var/log/containers/octavia:/var/log/octavia:z
                           - /run/octavia:/run/octavia:shared,z
+                        - {get_attr: [OctaviaProviderConfig, role_data, volumes]}
                     environment:
                       KOLLA_CONFIG_STRATEGY: COPY_ALWAYS
                 - {}

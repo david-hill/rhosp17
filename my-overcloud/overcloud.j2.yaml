@@ -406,6 +406,16 @@ parameters:
     description: The name of the stack/plan.
     type: string
 
+  AdminPassword:
+    description: The password for the keystone admin account, used for monitoring, querying neutron etc.
+    type: string
+    hidden: true
+
+  KeystoneRegion:
+    type: string
+    default: 'regionOne'
+    description: Keystone region for endpoint
+
 {% for role in roles %}
 {%- if role.deprecated_param_scheduler_hints is defined or role.deprecated_param_extraconfig is defined %}
 {%- if not parameter_groups_defined|default(false) %}
@@ -413,6 +423,7 @@ parameter_groups:
 - label: deprecated
   description: Do not use deprecated params, they will be removed.
   parameters:
+    - DnsServers
 {%- set parameter_groups_defined = true %}
 {%- endif %}
 {%- endif %}
@@ -928,6 +939,37 @@ resources:
     properties:
       CtlplaneNetworkCidrs: {get_attr: [ControlVirtualIP, network, tags]}
 
+  # NOTE(tkajinam): Backend services and haproxy might be running in different
+  #                 nodes, so we need to gather all frontend firewall rules
+  #                 across all roles and pass the combined data to firewall
+  #                 configuration task in the node where haproxy (or edge
+  #                 haproxy) is assigned to.
+  FirewallFrontendRules:
+    type: OS::Heat::Value
+    properties:
+      type: json
+      value:
+        frontend:
+          map_merge:
+{% for role in roles %}
+            - get_attr: [{{role.name}}ServiceChainRoleData, value, firewall_frontend_rules]
+{% endfor %}
+        ssl_frontend:
+          map_merge:
+{% for role in roles %}
+            - get_attr: [{{role.name}}ServiceChainRoleData, value, firewall_ssl_frontend_rules]
+{% endfor %}
+        edge_frontend:
+          map_merge:
+{% for role in roles %}
+            - get_attr: [{{role.name}}ServiceChainRoleData, value, firewall_edge_frontend_rules]
+{% endfor %}
+        edge_ssl_frontend:
+          map_merge:
+{% for role in roles %}
+            - get_attr: [{{role.name}}ServiceChainRoleData, value, firewall_edge_ssl_frontend_rules]
+{% endfor %}
+
 {%- for role in roles %}
   {{role.name}}GroupVars:
     type: OS::Heat::Value
@@ -1004,6 +1046,11 @@ resources:
         tripleo_network_config_with_ansible: {get_param: NetworkConfigWithAnsible}
         default_route_networks: {{role.default_route_networks|default(['ControlPlane'])}}
         networks_skip_config: {{ role.networks_skip_config|default([]) }}
+        tripleo_firewall_rules: {get_attr: [{{role.name}}ServiceChainRoleData, value, firewall_rules]}
+        tripleo_firewall_frontend_rules: {get_attr: [FirewallFrontendRules, value, frontend]}
+        tripleo_firewall_ssl_frontend_rules: {get_attr: [FirewallFrontendRules, value, ssl_frontend]}
+        tripleo_firewall_edge_frontend_rules: {get_attr: [FirewallFrontendRules, value, edge_frontend]}
+        tripleo_firewall_edge_ssl_frontend_rules: {get_attr: [FirewallFrontendRules, value, edge_ssl_frontend]}
         role_tags: {{role.tags}}
 
   {{role.name}}NetworkConfig:
@@ -1191,7 +1238,7 @@ resources:
 {%- for role in roles %}
         {{role.name}}:
           yaql:
-            expression: list($.data.where($ != null)).flatten()
+            expression: list($.data.where($ != null and len($) > 0)).flatten()
             data:
               - {get_attr: [Networks, net_attributes_map, ctlplane, subnets, {get_param: {{role.name}}ControlPlaneSubnet}, gateway_ip]}
     {%- for network in networks %}
@@ -1362,3 +1409,9 @@ outputs:
     value:
       roles_data: {{ roles }}
       networks_data: {{ networks }}
+  AdminPassword:
+    description: The password for the keystone admin account, used for monitoring, querying neutron etc.
+    value: {get_param: AdminPassword}
+  KeystoneRegion:
+    description: Keystone region for endpoint
+    value: {get_param: KeystoneRegion}

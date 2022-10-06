@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   DefaultPasswords:
     default: {}
@@ -152,6 +152,8 @@ outputs:
                 when:
                   - groups['ceph_mon'] | default([]) | length == 0
                   - groups['ceph_nfs'] | default([]) | length > 0
+                vars:
+                  tripleo_cephadm_config_home: {get_param: CephConfigPath}
       external_update_tasks: []
       external_upgrade_tasks: []
       config_settings: {}

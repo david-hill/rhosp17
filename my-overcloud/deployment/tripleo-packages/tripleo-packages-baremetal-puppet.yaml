@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -108,8 +108,8 @@ parameters:
     default: []
     description: List of streams to be configured before updating packages. Each list
              element contains a dictionary with the following values defined
-             module[mandatory], stream[mandatory] and profile[optional]. If the profile
-             is not specified 'common' will be used instead.
+             module[mandatory], stream[mandatory], distribution_version[mandatory] and profile[optional].
+             If the profile is not specified 'common' will be used instead.
     type: json
     tags:
       - role_specific
@@ -282,8 +282,9 @@ outputs:
                 state: present
               loop: "{{ dnf_module_list|list }}"
               when:
-                - ansible_facts['distribution_major_version'] is version('8', '>=')
                 - dnf_module_list|length > 0
+                - item.distribution_version is defined
+                - ansible_facts['distribution_major_version'] is version(item.distribution_version, '==')
             - name: Ensure TripleO prerequisite packages are installed
               package:
                 name:
@@ -299,6 +300,7 @@ outputs:
                 state: present
               when: ansible_facts['distribution_major_version'] is version('8', '==')
         - name: check if libvirt is installed
+          when: step|int == 0
           command: /usr/bin/rpm -q libvirt-daemon
           failed_when: false
           register: libvirt_installed
@@ -313,7 +315,9 @@ outputs:
           loop:
             - libvirtd.service
             - virtlogd.socket
-          when: libvirt_installed.rc == 0
+          when:
+            - step|int == 0
+            - libvirt_installed.rc == 0
         - name: Special treatment for OpenvSwitch
           tripleo_ovs_upgrade:
           when:
@@ -398,8 +402,9 @@ outputs:
           loop: "{{ dnf_module_list|list }}"
           when:
             - step|int == 0
-            - ansible_facts['distribution_major_version'] is version('8', '>=')
             - dnf_module_list|length > 0
+            - item.distribution_version is defined
+            - ansible_facts['distribution_major_version'] is version(item.distribution_version, '==')
         - name: Check for existing yum.pid
           stat:  path=/run/yum.pid
           register: yum_pid_file

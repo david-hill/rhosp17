@@ -32,8 +32,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -137,6 +137,7 @@ outputs:
         cinder::storage_availability_zone: {get_param: CinderStorageAvailabilityZone}
         cinder::rabbit_heartbeat_timeout_threshold: 60
         cinder::rpc_response_timeout: {get_param: CinderRpcResponseTimeout}
+        cinder::rabbit_heartbeat_in_pthread: false
         cinder::db::database_db_max_retries: -1
         cinder::db::database_max_retries: -1
         cinder::cron::db_purge::minute: {get_param: CinderCronDbPurgeMinute}

@@ -19,8 +19,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   HeatPassword:
     description: The password for the Heat service and db account, used by the Heat services.
@@ -183,6 +183,7 @@ outputs:
             heat::enable_proxy_headers_parsing: true
             heat::rpc_response_timeout: 600
             heat::rabbit_heartbeat_timeout_threshold: 60
+            heat::rabbit_heartbeat_in_pthread: false
             heat::region_name: {get_param: KeystoneRegion}
             heat::keystone::authtoken::project_name: 'service'
             heat::keystone::authtoken::user_domain_name: 'Default'

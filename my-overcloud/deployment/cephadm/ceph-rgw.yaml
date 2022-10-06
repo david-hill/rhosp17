@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   DefaultPasswords:
     default: {}
@@ -77,8 +77,6 @@ resources:
       type: json
       value:
         vars:
-          radosgw_keystone: true
-          radosgw_keystone_ssl: false
           radosgw_address_block:
             list_join:
               - ','
@@ -102,6 +100,14 @@ outputs:
               - if:
                 - {get_param: CephEnableDashboard}
                 - - '9100'
+      firewall_frontend_rules:
+        '100 ceph_rgw':
+          dport:
+            - {get_param: [EndpointMap, CephRgwInternal, port]}
+      firewall_ssl_frontend_rules:
+        '100 ceph_rgw_ssl':
+          dport:
+            - {get_param: [EndpointMap, CephRgwPublic, port]}
       keystone_resources:
         swift:
           endpoints:
@@ -141,6 +147,7 @@ outputs:
                     - {get_attr: [CephRgwAnsibleVars, value, vars]}
                   ceph_rgw_config_overrides:
                     global:
+                      rgw_keystone_verify_ssl: false
                       rgw_keystone_api_version: 3
                       rgw_keystone_url: {get_param: [EndpointMap, KeystoneInternal, uri_no_suffix]}
                       rgw_keystone_accepted_roles: 'member, Member, admin'
@@ -161,6 +168,7 @@ outputs:
                       rgw_max_attr_name_len: 128
                       rgw_max_attrs_num_in_req: 90
                       rgw_max_attr_size: 256
+                      rgw_keystone_accepted_reader_roles: 'SwiftSystemReader'
 
       metadata_settings:
         if:

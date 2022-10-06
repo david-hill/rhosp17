@@ -116,7 +116,6 @@ parameter_defaults:
     - gnocchi://?archive_policy=ceilometer-high-rate
   CeilometerQdrPublishEvents: true
   ManageEventPipeline: true
-
   Debug: true
   DockerPuppetDebug: True
   CephAnsibleDisksConfig:
@@ -134,7 +133,6 @@ parameter_defaults:
   CephPoolDefaultSize: 1
   CephPools:
     - name: altrbd
-      pg_num: 8
       rule_name: replicated_rule
   CephAnsibleExtraConfig:
     centos_package_dependencies: []

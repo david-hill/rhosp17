@@ -77,7 +77,6 @@
     - OS::TripleO::Services::OsloMessagingRpc
     - OS::TripleO::Services::PlacementApi
     - OS::TripleO::Services::Podman
-    - OS::TripleO::Services::Rear
     - OS::TripleO::Services::Redis
     - OS::TripleO::Services::Rhsm
     - OS::TripleO::Services::Rsyslog
@@ -94,3 +93,4 @@
     - OS::TripleO::Services::Tuned
     - OS::TripleO::Services::UndercloudUpgrade
     - OS::TripleO::Services::TripleoValidations
+

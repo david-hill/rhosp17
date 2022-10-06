@@ -11,8 +11,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -199,6 +199,7 @@ outputs:
             - tls_cache_enabled
             - 'dogpile.cache.pymemcache'
             - 'dogpile.cache.memcached'
+          nova::rabbit_heartbeat_in_pthread: false
           nova::upgrade_level_compute:
             if:
             - compute_upgrade_level_set

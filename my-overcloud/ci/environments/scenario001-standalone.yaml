@@ -9,6 +9,7 @@ resource_registry:
   OS::TripleO::Services::CephMgr: ../../deployment/cephadm/ceph-mgr.yaml
   OS::TripleO::Services::CephMon: ../../deployment/cephadm/ceph-mon.yaml
   OS::TripleO::Services::CephOSD: ../../deployment/cephadm/ceph-osd.yaml
+  OS::TripleO::Services::CephGrafana: ../../deployment/cephadm/ceph-grafana.yaml
   OS::TripleO::Services::CephClient: ../../deployment/cephadm/ceph-client.yaml
   OS::TripleO::Services::CephRgw: ../../deployment/cephadm/ceph-rgw.yaml
   OS::TripleO::Services::Collectd: ../../deployment/metrics/collectd-container-puppet.yaml
@@ -23,7 +24,6 @@ resource_registry:
   OS::TripleO::Services::Multipathd: ../../deployment/multipathd/multipathd-container-ansible.yaml
   OS::TripleO::Services::OsloMessagingRpc: ../../deployment/rabbitmq/rabbitmq-messaging-rpc-pacemaker-puppet.yaml
   OS::TripleO::Services::OsloMessagingNotify: ../../deployment/rabbitmq/rabbitmq-messaging-notify-shared-puppet.yaml
-  OS::TripleO::Services::Rear: ../../deployment/backup-and-restore/rear-baremetal-ansible.yaml
   OS::TripleO::Services::Redis: ../../deployment/database/redis-pacemaker-puppet.yaml
   OS::TripleO::Services::CinderBackup: ../../deployment/cinder/cinder-backup-pacemaker-puppet.yaml
   OS::TripleO::Services::CinderVolume: ../../deployment/cinder/cinder-volume-pacemaker-puppet.yaml
@@ -57,23 +57,18 @@ parameter_defaults:
   ManageEventPipeline: true
   ManagePipeline: true
   Debug: true
-  CephSpecFqdn: true
-  CephOsdSpec:
-    data_devices:
-      paths:
-        - /dev/ceph_vg/ceph_lv_data
-  CephPoolDefaultPgNum: 8
-  CephPoolDefaultSize: 1
+  DeployedCeph: true
+  CephEnableDashboard: true
+  CephDashboardPort: 8445
+  GrafanaDashboardPort: 3200
   CinderRbdExtraPools: altrbd,pool2,pool3
   CephPools:
     - name: altrbd
-      pg_num: 8
       rule_name: replicated_rule
       application: rbd
   #NOTE: These ID's and keys should be regenerated for
   # a production deployment. What is here is suitable for
   # developer and CI testing only.
-  CephClusterFSID: '4b5c8c0a-ff60-454b-a1b4-9747aa737d19'
   CephClientKey: 'AQC+vYNXgDAgAhAAc8UoYt+OTz5uhV7ItLdwUw=='
   CephExtraKeys:
     - name: "client.glance"
@@ -190,7 +185,6 @@ parameter_defaults:
       globalkey: globalvalue
     osd:
       osdkey: osdvalue
-    foo: bar
     mon:
       mon_warn_on_pool_no_redundancy: false
       mon_warn_on_insecure_global_id_reclaim_allowed: false
@@ -206,4 +200,3 @@ parameter_defaults:
     - /dev/loop4
   MultipathdEnable: true
   NovaLibvirtVolumeUseMultipath: true
-  BackupAndRestoreSkipNFSTest: true

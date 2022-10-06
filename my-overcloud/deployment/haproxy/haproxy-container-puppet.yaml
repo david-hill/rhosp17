@@ -17,8 +17,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   EndpointMap:
     default: {}
@@ -157,6 +157,12 @@ outputs:
         '107 haproxy stats':
           dport: 1993
       monitoring_subscription: {get_param: MonitoringSubscriptionHaproxy}
+      ansible_group_vars:
+        tripleo_firewall_frontend_enabled: true
+        tripleo_firewall_ssl_frontend_enabled:
+          if:
+            - public_tls_enabled
+            - true
       config_settings:
         map_merge:
           - get_attr: [HAProxyLogging, config_settings]
@@ -172,7 +178,8 @@ outputs:
                 params:
                   $NETWORK: {get_param: [ServiceNetMap, HaproxyNetwork]}
             tripleo::haproxy::redis_password: {get_param: RedisPassword}
-            tripleo::haproxy::crl_file: {get_param: InternalTLSCRLPEMFile}
+            # disable the use CRL file until we can restart the container when the file expires
+            tripleo::haproxy::crl_file: null
             tripleo::haproxy::haproxy_stats: {get_param: HAProxyStatsEnabled}
             enable_load_balancer: {get_param: EnableLoadBalancer}
             tripleo::profile::base::haproxy::certificates_specs:

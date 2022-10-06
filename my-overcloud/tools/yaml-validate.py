@@ -53,6 +53,10 @@ ENDPOINT_MAP_FILE = 'endpoint_map.yaml'
 OPTIONAL_SECTIONS = ['ansible_group_vars',
                      'cellv2_discovery',
                      'firewall_rules',
+                     'firewall_frontend_rules',
+                     'firewall_ssl_frontend_rules',
+                     'firewall_edge_frontend_rules',
+                     'firewall_edge_ssl_frontend_rules',
                      'keystone_resources']
 REQUIRED_DOCKER_SECTIONS = ['service_name', 'docker_config', 'puppet_config',
                             'config_settings']
@@ -61,9 +65,9 @@ OPTIONAL_DOCKER_SECTIONS = ['container_puppet_tasks', 'upgrade_tasks',
                             'pre_upgrade_rolling_tasks',
                             'post_upgrade_tasks', 'update_tasks',
                             'post_update_tasks', 'service_config_settings',
-                            'host_prep_tasks', 'metadata_settings',
-                            'kolla_config', 'global_config_settings',
-                            'external_deploy_tasks',
+                            'host_firewall_tasks', 'host_prep_tasks',
+                            'metadata_settings', 'kolla_config',
+                            'global_config_settings', 'external_deploy_tasks',
                             'external_post_deploy_tasks',
                             'container_config_scripts', 'step_config',
                             'monitoring_subscription', 'scale_tasks',
@@ -423,23 +427,6 @@ def validate_controller_dashboard(filename, tpl):
     return 0
 
 
-def validate_controller_storage_nfs(filename, tpl, exclude_service=()):
-    control_role_filename = os.path.join(os.path.dirname(filename),
-                                         './Controller.yaml')
-    with open(control_role_filename, 'r') as f:
-        control_role_tpl = yaml.safe_load(f.read())
-
-    control_role_services = control_role_tpl[0]['ServicesDefault']
-    for role in tpl:
-        if role['name'] == 'ControllerStorageNfs':
-            services = [x for x in role['ServicesDefault'] if (x not in exclude_service)]
-            if sorted(services) != sorted(control_role_services):
-                print('ERROR: ServicesDefault in %s is different from '
-                      'ServicesDefault in roles/Controller.yaml' % filename)
-                return 1
-    return 0
-
-
 def validate_hci_role(hci_role_filename, hci_role_tpl):
     role_files = ['HciCephAll', 'HciCephFile', 'HciCephMon', 'HciCephObject']
     if hci_role_filename in ['./roles/' + x + '.yaml' for x in role_files]:
@@ -526,6 +513,7 @@ def validate_controller_no_ceph_role(filename, tpl):
             services.append('OS::TripleO::Services::CephMgr')
             services.append('OS::TripleO::Services::CephGrafana')
             services.append('OS::TripleO::Services::CephMon')
+            services.append('OS::TripleO::Services::CephNfs')
             services.append('OS::TripleO::Services::CephRbdMirror')
             services.append('OS::TripleO::Services::CephRgw')
             if sorted(services) != sorted(control_role_services):
@@ -1231,11 +1219,6 @@ def validate(filename, param_map):
                 filename.startswith('./roles/ComputeHCIOvsDpdk.yaml') or \
                 filename.startswith('./roles/ComputeHCISriov.yaml'):
             retval |= validate_hci_computehci_role(filename, tpl)
-
-        if filename.startswith('./roles/ControllerStorageNfs.yaml'):
-            exclude = [
-                'OS::TripleO::Services::CephNfs']
-            retval |= validate_controller_storage_nfs(filename, tpl, exclude)
 
         if filename.startswith('./roles/ControllerStorageDashboard.yaml'):
             retval |= validate_controller_dashboard(filename, tpl)

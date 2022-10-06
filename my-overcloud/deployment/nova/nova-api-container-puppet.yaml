@@ -27,8 +27,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -318,6 +318,13 @@ outputs:
         '113 nova_api':
           dport:
             - 8774
+      firewall_frontend_rules:
+        '100 nova_osapi_haproxy_frontend':
+          dport:
+            - 8774
+      firewall_ssl_frontend_rules:
+        '100 nova_osapi_haproxy_frontend_ssl':
+          dport:
             - 13774
       keystone_resources:
         nova:

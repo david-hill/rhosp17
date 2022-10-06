@@ -27,8 +27,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -141,6 +141,13 @@ outputs:
         '139 nova_metadata':
           dport:
             - 8775
+      firewall_frontend_rules:
+        '100 nova_metadatahaproxy_frontend':
+          dport:
+            - 8775
+      firewall_ssl_frontend_rules:
+        '100 nova_metadatahaproxy_frontend_ssl':
+          dport:
             - 13775
       monitoring_subscription: {get_param: MonitoringSubscriptionNovaMetadata}
       config_settings:

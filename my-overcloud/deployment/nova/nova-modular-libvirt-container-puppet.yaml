@@ -781,7 +781,7 @@ outputs:
                               chmod 644 /etc/pki/CA/cacert.pem
                               cp /etc/pki/tls/certs/libvirt-server-cert.crt /etc/pki/libvirt/servercert.pem
                               cp /etc/pki/tls/private/libvirt-server-cert.key /etc/pki/libvirt/private/serverkey.pem
-                              systemctl reload tripleo_nova_libvirt
+                              podman exec nova_virtproxyd virt-admin server-update-tls virtproxyd || systemctl reload tripleo_nova_virtproxyd
                             params:
                               CACERT:
                                 if:
@@ -809,7 +809,7 @@ outputs:
                           # Copy cert and key to libvirt dirs
                           cp /etc/pki/tls/certs/libvirt-client-cert.crt /etc/pki/libvirt/clientcert.pem
                           cp /etc/pki/tls/private/libvirt-client-cert.key /etc/pki/libvirt/private/clientkey.pem
-                          systemctl reload tripleo_nova_libvirt
+                          podman exec nova_virtproxyd virt-admin server-update-tls virtproxyd || systemctl reload tripleo_nova_virtproxyd
                         key_size:
                           if:
                             - key_size_libvirt_override_set
@@ -841,7 +841,6 @@ outputs:
                               chgrp qemu /etc/pki/qemu/server-*
                               chmod 0640 /etc/pki/qemu/server-cert.pem
                               chmod 0640 /etc/pki/qemu/server-key.pem
-                              systemctl reload tripleo_nova_libvirt
                             params:
                               CACERT:
                                 if:
@@ -874,13 +873,43 @@ outputs:
                           chgrp qemu /etc/pki/qemu/client-*
                           chmod 0640 /etc/pki/qemu/client-cert.pem
                           chmod 0640 /etc/pki/qemu/client-key.pem
-                          systemctl reload tripleo_nova_libvirt
                         key_size:
                           if:
                             - key_size_qemu_client_override_set
                             - {get_param: QemuClientCertificateKeySize}
                             - {get_param: CertificateKeySize}
                         ca: ipa
+          - - name: Set up systemd target for libvirt services
+              when: step|int == 4
+              block:
+                - name: Create systemd file
+                  copy:
+                    dest: /etc/systemd/system/tripleo_nova_libvirt.target
+                    mode: '0644'
+                    owner: root
+                    group: root
+                    content: |
+                      [Unit]
+                      Wants=tripleo_nova_virtsecretd.service
+                      Wants=tripleo_nova_virtnodedevd.service
+                      Wants=tripleo_nova_virtstoraged.service
+                      Wants=tripleo_nova_virtproxyd.service
+                      Wants=tripleo_nova_virtqemud.service
+                      After=tripleo_nova_virtsecretd.service
+                      After=tripleo_nova_virtnodedevd.service
+                      After=tripleo_nova_virtstoraged.service
+                      After=tripleo_nova_virtproxyd.service
+                      After=tripleo_nova_virtqemud.service
+                  become: true
+                  register: libvirt_target_result
+                - name: Reload systemd
+                  systemd:
+                    name: tripleo_nova_libvirt.target
+                    enabled: true
+                    state: restarted
+                    daemon_reload: true
+                  become: true
+                  when: libvirt_target_result.changed
       host_prep_tasks:
         list_concat:
           - {get_attr: [NovaLibvirtLogging, host_prep_tasks]}

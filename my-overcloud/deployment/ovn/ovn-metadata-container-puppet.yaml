@@ -40,8 +40,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   EndpointMap:
     default: {}
@@ -89,6 +89,10 @@ parameters:
     description: Timeout in seconds for the OVSDB connection transaction
     type: number
     default: 180
+  OVNOvsdbProbeInterval:
+    description: Probe interval in ms for the OVSDB session
+    type: number
+    default: 60000
   MonitoringSubscriptionOvnMetadata:
     default: 'overcloud-ovn-metadata'
     type: string
@@ -109,10 +113,6 @@ parameters:
     description: Additional domain sockets for the docker daemon to bind to (useful for mounting
                  into containers that launch other containers)
     type: comma_delimited_list
-  OVNRemoteProbeInterval:
-    description: Probe interval in ms
-    type: number
-    default: 60000
   CertificateKeySize:
     type: string
     default: '2048'
@@ -175,8 +175,8 @@ outputs:
             neutron::agents::ovn_metadata::auth_tenant: 'service'
             neutron::agents::ovn_metadata::metadata_host: {get_param: [EndpointMap, NovaMetadataCellInternal, host_nobrackets]}
             neutron::agents::ovn_metadata::ovsdb_connection_timeout: {get_param: OVNDbConnectionTimeout}
+            neutron::agents::ovn_metadata::ovsdb_probe_interval: {get_param: OVNOvsdbProbeInterval}
             ovn::southbound::port: {get_param: OVNSouthboundServerPort}
-            neutron::agents::ovn_metadata::ovn_remote_probe_interval: {get_param: OVNRemoteProbeInterval}
             neutron::agents::ovn_metadata::debug:
                 if:
                 - {get_param: OvnMetadataAgentDebug}

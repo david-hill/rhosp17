@@ -80,8 +80,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   RoleName:
     default: ''
@@ -149,6 +149,7 @@ outputs:
               - {get_param: NeutronGlobalPhysnetMtu}
             neutron::db::sync::extra_params: {get_param: NeutronDBSyncExtraParams}
             neutron::vlan_transparent: {get_param: EnableVLANTransparency}
+            neutron::rabbit_heartbeat_in_pthread: false
           - if:
             - dhcp_agents_zero
             - {}

@@ -21,8 +21,8 @@ parameters:
   ServiceNetMap:
     default: {}
     description: Mapping of service_name -> network name. Typically set
-                 via parameter_defaults in the resource registry.  This
-                 mapping overrides those in ServiceNetMapDefaults.
+                 via parameter_defaults in the resource registry. Use
+                 parameter_merge_strategies to merge it with the defaults.
     type: json
   DefaultPasswords:
     default: {}
@@ -57,8 +57,7 @@ parameters:
   CollectdConnectionType:
     default: 'amqp1'
     description: Define which write plugin should collectd use. Currently
-                 supported are 'amqp1', 'network' and 'gnocchi'.
-                 NOTE gnocchi is supported in puppet only.
+                 supported are 'amqp1' and 'network'.
     type: string
   CollectdDefaultPollingInterval:
     default: 120
@@ -79,7 +78,6 @@ parameters:
       - interface
       - load
       - memory
-      - processes
       - unixsock
       - uptime
     type: comma_delimited_list
