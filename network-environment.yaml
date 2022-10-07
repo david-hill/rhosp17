@@ -1,9 +1,9 @@
 resource_registry:
 #  OS::TripleO::BlockStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/cinder-storage.yaml
-  OS::TripleO::Compute::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/compute.yaml
-  OS::TripleO::Controller::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/controller.yaml
+#  OS::TripleO::Compute::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/compute.yaml
+    #  OS::TripleO::Controller::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/controller.yaml
 #  OS::TripleO::ObjectStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/swift-storage.yaml
-  OS::TripleO::CephStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/ceph-storage.yaml
+#  OS::TripleO::CephStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/ceph-storage.yaml
   OS::TripleO::NodeUserData: /home/stack/rhosp17/my-overcloud/swap.yaml
 parameter_defaults:
   # Customize all these values to match the local environment
@@ -31,7 +31,7 @@ parameter_defaults:
   DnsServers: [ "8.8.8.8" ]
   # Customize bonding options if required (will be ignored if bonds are not used)
   BondInterfaceOvsOptions:
-      "bond_mode=balance-tcp lacp=active other-config:lacp-fallback-ab=true"
+      "bond_mode=balance-slb lacp=active other-config:lacp-fallback-ab=true"
   NovaComputeExtraConfig:
     nova::compute::reserved_host_memory: 512
   ComputeCount: 2
