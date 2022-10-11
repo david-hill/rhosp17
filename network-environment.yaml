@@ -1,11 +1,14 @@
-resource_registry:
+#resource_registry:
 #  OS::TripleO::BlockStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/cinder-storage.yaml
 #  OS::TripleO::Compute::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/compute.yaml
     #  OS::TripleO::Controller::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/controller.yaml
 #  OS::TripleO::ObjectStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/swift-storage.yaml
 #  OS::TripleO::CephStorage::Net::SoftwareConfig: /home/stack/rhosp17/my-overcloud/network/config/single-nic-vlans/ceph-storage.yaml
-  OS::TripleO::NodeUserData: /home/stack/rhosp17/my-overcloud/swap.yaml
+#  OS::TripleO::AllNodesExtraConfig: /home/stack/rhosp17/my-overcloud/extraconfig/all_nodes/swap-partition.yaml
 parameter_defaults:
+  ControllerNetworkConfigTemplate: '/home/stack/rhosp17/single_nic_vlans.j2'
+  CephStorageNetworkConfigTemplate: '/home/stack/rhosp17/single_nic_vlans_storage.j2'
+  ComputeNetworkConfigTemplate: '/home/stack/rhosp17/single_nic_vlans.j2'
   # Customize all these values to match the local environment
   InternalApiNetCidr: 172.17.0.0/24
   StorageNetCidr: 172.18.0.0/24
